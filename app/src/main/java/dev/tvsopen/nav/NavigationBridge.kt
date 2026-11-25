@@ -2,6 +2,7 @@ package dev.tvsopen.nav
 
 import android.util.Log
 import dev.tvsopen.protocol.DashState
+import dev.tvsopen.protocol.Maneuvers
 import dev.tvsopen.protocol.NavStep
 import dev.tvsopen.protocol.OutboundId
 import dev.tvsopen.protocol.Pictograms
@@ -117,7 +118,6 @@ class NavigationBridge(
                         }
                     }
 
-                    // Jupiter clusters use 0x5B 0x50 for the pictogram icon by name.
                     if (isJupiter) {
                         val picName = jupiterPictogramName(step.pictogram, step.title)
                         driver.buildPictogram(picName)?.let { ble.write(it) }
@@ -165,14 +165,13 @@ class NavigationBridge(
             t.contains("slight right") || t.contains("keep right") -> "SLIGHT RIGHT"
             t.contains("right") -> "TURN RIGHT"
             t.contains("destination") || t.contains("arrive") -> "ARRIVED"
-            picId == Pictograms.TURN_LEFT -> "TURN LEFT"
-            picId == Pictograms.TURN_RIGHT -> "TURN RIGHT"
-            picId == Pictograms.SHARP_LEFT -> "SHARP LEFT"
-            picId == Pictograms.SHARP_RIGHT -> "SHARP RIGHT"
-            picId == Pictograms.SLIGHT_LEFT -> "SLIGHT LEFT"
-            picId == Pictograms.SLIGHT_RIGHT -> "SLIGHT RIGHT"
-            picId == Pictograms.U_TURN -> "U TURN"
-            picId == Pictograms.ARRIVED -> "ARRIVED"
+            picId == Maneuvers.SHARP_LEFT -> "SHARP LEFT"
+            picId == Maneuvers.SLIGHT_LEFT || picId == Maneuvers.SLIGHT_LEFT_ALT -> "SLIGHT LEFT"
+            picId == Maneuvers.SHARP_RIGHT -> "SHARP RIGHT"
+            picId == Maneuvers.SLIGHT_RIGHT || picId == Maneuvers.SLIGHT_RIGHT_ALT -> "SLIGHT RIGHT"
+            picId == Maneuvers.U_TURN_LEFT || picId == Maneuvers.U_TURN_RIGHT -> "U TURN"
+            picId == Maneuvers.ARRIVED -> "ARRIVED"
+            picId in Maneuvers.ROUNDABOUT_SLIGHT_LEFT..Maneuvers.ROUNDABOUT_U_TURN -> "ROUNDABOUT"
             else -> "GO STRAIGHT"
         }
     }
