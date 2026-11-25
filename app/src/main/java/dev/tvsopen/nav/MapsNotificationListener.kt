@@ -2,7 +2,6 @@ package dev.tvsopen.nav
 
 import android.app.Notification
 import android.content.ComponentName
-import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -14,42 +13,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * One turn-by-turn instruction, normalised across map providers.
- */
 data class NavInstruction(
-    /** "Turn left", "Roundabout, exit 2", … — the maneuver. */
     val title: String,
-    /** "Onto NH44" — the street. */
     val street: String,
-    /** Metres to the maneuver; -1 when unknown. */
     val distanceMeters: Int,
     val etaMinutes: Int = 0,
-    /** Resolved cluster pictogram id, or null when unresolved. */
     val pictogram: Int?,
     val provider: String,
 ) {
-    /**
-     * Best single line for this cluster's display.
-     *
-     * The maneuver first, the street second. The provider that is actually in
-     * use here (`com.tvsm.connect`) posts the maneuver as the title and trip
-     * metrics (`"2.32 km • 3 min • 11:40 AM ETA"`) as the text — preferring the
-     * street therefore showed an ETA fragment where the turn instruction
-     * belongs, on both lines at once. The Google Maps shape is the mirror:
-     * its title is distance-only (`"550 m"`), so [NavParsing] leaves the
-     * maneuver empty and this falls through to the street, which is the road.
-     *
-     * The raw instruction is compressed to short codes ([NavShortCodes]) so a
-     * 10/12-character row fits far more, prefixed with an ASCII arrow for
-     * glanceability, and rolled ([RollingText]) when it still overflows so the
-     * tail scrolls into view instead of being clipped. [tick] advances once
-     * per bridge send; pass 0 for a static snapshot.
-     *
-     * The 17-byte payload is still sent; the bytes beyond the row are
-     * zero-padded and the `0xFF` terminator stays at index 19, because that is
-     * the frame shape the cluster expects. Only the character count changed.
-     */
     fun displayLine(maxChars: Int = RowChars.NTORQ, tick: Int = 0): String {
         val combined = listOf(title, street)
             .firstOrNull { it.isNotBlank() } ?: "Navigating"
@@ -59,19 +30,8 @@ data class NavInstruction(
         return RollingText.window(full, maxChars, tick)
     }
 
-    /**
-     * The ETA / distance line, in TVS's own rendering.
-     *
-     * `10Km 700m` for multi-kilometre distances (as the manual prints it),
-     * plain metres below that. Truncated to the row: without the take, a
-     * `"ETA 3m 2Km 320m"` line overran the 10-character maneuver row and the
-     * cluster clipped the distance off the end. Rolls like [displayLine] when
-     * it still overflows.
-     */
     fun metricsLine(maxChars: Int = RowChars.NTORQ_LINE_1, tick: Int = 0): String {
         val d = when {
-            // -1 is NavParsing's "unknown distance" sentinel. Never ship it as
-            // "-1m", and never turn it into an invented "0m" on the cluster.
             distanceMeters < 0 -> ""
             distanceMeters >= 1000 -> "${distanceMeters / 1000}Km ${distanceMeters % 1000}m"
             else -> "${distanceMeters}m"
@@ -84,38 +44,17 @@ data class NavInstruction(
     }
 }
 
-/**
- * Reads turn-by-turn out of *any* maps app.
- *
- * This is the same approach as the official app
- * (`com.tvs.ble.feature.NotificationListenerService`): the cluster has no idea
- * what a maps app is, so we take instructions from whatever app is foreground
- * and forward them over BLE. No map SDK, no API key, no account — which is
- * what makes "use Google Maps without a TVS account" work.
- *
- * ## Recognising a navigation notification
- *
- * There is no standard flag, so we accept a notification when it
- *  - comes from a known maps package, **or**
- *  - looks like navigation (has the navigation extras we use).
- *
- * A user-configurable package allowlist comes first so a new maps app works
- * without a code change.
- */
 class MapsNotificationListener : NotificationListenerService() {
 
     private val _instruction = MutableStateFlow<NavInstruction?>(null)
     val instruction: StateFlow<NavInstruction?> = _instruction.asStateFlow()
 
-    /** True when a maps app is currently navigating. */
     private val _navigating = MutableStateFlow(false)
     val navigating: StateFlow<Boolean> = _navigating.asStateFlow()
 
-    /** Built-in maps apps plus the packages the rider added in More. */
     private fun allowedPackages(): Set<String> =
         DEFAULT_MAPS_PACKAGES + RidePrefs.load(applicationContext).extraMapsPackages
 
-    /** Key of the notification that posted the current step, for teardown. */
     @Volatile
     private var activeNavKey: String? = null
 
@@ -123,7 +62,7 @@ class MapsNotificationListener : NotificationListenerService() {
         val n = sbn ?: return
         val pkg = n.packageName
         val extras = n.notification?.extras ?: return
-        if (pkg.isBlank()) return
+        if (pkg.isBlank() || isSystemNotification(pkg)) return
 
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
@@ -134,17 +73,7 @@ class MapsNotificationListener : NotificationListenerService() {
         val parsed = NavParsing.parse(title, text, bigText, subText)
         val distance = parsed.distanceMeters
         val category = n.notification?.category
-        // Kept at DEBUG: the Log tab is the evidence base for why a given
-        // notification did or did not reach the cluster.
-        Log.d(TAG, "notification posted pkg=$pkg category=$category " +
-            "ongoing=$ongoing title='$title'")
 
-        // Trust known maps packages and explicit navigation extras. For unknown
-        // packages, require CATEGORY_NAVIGATION as well as distance-like content:
-        // the loose "ongoing + has text + distance >= 0" fallback misfires on
-        // non-nav notifications whose text contains time units that look like
-        // metres (e.g. a system charging notification "1 h 13 m until full"
-        // parses "13 m" as 13 metres and was mirrored as a turn).
         val hasNavExtras = extras.containsKey("android.app.extra.MAPS_MODE") ||
             extras.containsKey("navigation.mode")
         val looksLikeNav = pkg in allowedPackages() || hasNavExtras ||
@@ -162,15 +91,9 @@ class MapsNotificationListener : NotificationListenerService() {
             extras.containsKey("android.telecom.extra.INCOMING_CALL_EXTRAS") ||
             extras.containsKey("android.telecom.extra.INCOMING_CALL_ADDRESS")
         val selectedCall = pkg in prefs.extraCallPackages && looksLikeCall(title, text)
-        // Any-app mode still needs a call-shaped notification; otherwise every
-        // message from every app would be announced as an incoming call.
-        val anyAppCall = prefs.mirrorAnyAppNotifications &&
-            !isSystemNotification(pkg) && looksLikeCall(title, text)
+        val anyAppCall = prefs.mirrorAnyAppNotifications && looksLikeCall(title, text)
         val isCall = structuralCall || selectedCall || anyAppCall
         if (isCall) {
-            // Phone dialer calls follow the phone-calls toggle; VoIP/app calls
-            // (WhatsApp, Telegram, …) are mirrored when phone calls are enabled,
-            // since the cluster shows "who is calling" regardless of transport.
             if (prefs.mirrorPhoneCalls) {
                 postCall(n.key, pkg, extras, title, text)
             }
@@ -179,8 +102,7 @@ class MapsNotificationListener : NotificationListenerService() {
 
         val hasMessageStyle = extractMessagingStyle(extras) != null
         val selectedMessage = pkg in prefs.extraMessagePackages
-        val anyAppMessage = prefs.mirrorAnyAppNotifications &&
-            !isSystemNotification(pkg) && !ongoing
+        val anyAppMessage = prefs.mirrorAnyAppNotifications && !ongoing
         val isMessage = hasMessageStyle || category == Notification.CATEGORY_MESSAGE ||
             selectedMessage || anyAppMessage
         if (isMessage && prefs.mirrorMessages) {
@@ -188,12 +110,14 @@ class MapsNotificationListener : NotificationListenerService() {
         }
     }
 
-    /** Never mirror the app's own or the system UI's notifications as messages. */
     private fun isSystemNotification(pkg: String): Boolean =
         pkg == packageName || pkg == "com.android.systemui" ||
-            pkg == "android" || pkg.startsWith("com.android.")
+            pkg == "android" || pkg.startsWith("com.android.") ||
+            pkg.startsWith("com.samsung.android.app.routines") ||
+            pkg.startsWith("com.samsung.android.lool") ||
+            pkg.startsWith("com.sec.android.") ||
+            pkg == "com.google.android.gms"
 
-    /** Call-shaped wording, for apps that do not set the telecom extras. */
     private fun looksLikeCall(title: String, text: String): Boolean {
         val s = "$title $text".lowercase()
         return listOf(
@@ -309,14 +233,8 @@ class MapsNotificationListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         val removed = sbn ?: return
         val key = removed.key
-        // Clear a call/message alert posted from this notification.
         Session.clearAlert(key)
 
-        // Clear only when the notification that posted the active step goes
-        // away. Maps posts several notifications during a ride, and a removal
-        // of any of them from an allowlisted app used to schedule a full clear
-        // mid-route. Tracking the key also covers apps accepted structurally
-        // rather than by package — those could never clear at all.
         if (activeNavKey == null || removed.key != activeNavKey) return
         activeNavKey = null
         pendingClear?.let { handler.removeCallbacks(it) }
@@ -339,8 +257,6 @@ class MapsNotificationListener : NotificationListenerService() {
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         Log.w(TAG, "listener disconnected — navigation mirroring unavailable")
-        // An OEM can kill the listener without unbinding us. Rebind so mirroring
-        // recovers without a reinstall or a toggle cycle.
         runCatching {
             requestRebind(ComponentName(this, MapsNotificationListener::class.java))
         }.onFailure { Log.w(TAG, "rebind request failed: ${it.message}") }
@@ -348,66 +264,26 @@ class MapsNotificationListener : NotificationListenerService() {
 
     companion object {
         private const val TAG = "MapsNavListener"
-
-        // Known message/call packages are no longer hard-coded here. Notification
-        // category, telecom extras, MessagingStyle and the rider's own selections
-        // in More decide what gets mirrored.
-
         private const val EXTRA_MESSAGING_STYLE_KEY = "android.messagingStyle"
-
-        /**
-         * How long a cancelled navigation notification is given to be replaced.
-         *
-         * Nine seconds was the gap actually observed, so this sits just above
-         * it. Long enough to survive a refresh, short enough that genuinely
-         * ending a route clears the cluster promptly.
-         */
         private const val CLEAR_GRACE_MS = 12_000L
 
         val DEFAULT_MAPS_PACKAGES = setOf(
-            "com.google.android.apps.maps",       // Google Maps
-            "com.mappls.app",                     // MapMyIndia
-            "com.mmi.android.mmaps",              // Mapmyne
-            "org.organicmaps",                    // Organic Maps
-            "com.here.app.maps",                  // HERE WeGo
-            "com.waze",                           // Waze
-            "com.tomtom.gotcha",                  // TomTom Go
-            "com.transit.app.transitmaps",        // Transit
+            "com.google.android.apps.maps",
+            "com.mappls.app",
+            "com.mmi.android.mmaps",
+            "org.organicmaps",
+            "com.here.app.maps",
+            "com.waze",
+            "com.tomtom.gotcha",
+            "com.transit.app.transitmaps",
             "com.immobiletrack",
         )
     }
 }
-/**
- * How many characters each cluster text line actually shows.
- *
- * The protocol's text payload is 17 bytes and the Jupiter app fills all 17, which
- * is where the original assumption came from. TVS's Ntorq 125 manual documents
- * what this cluster renders. The rider confirms the display is asymmetric:
- * **10 characters on line 1, 12 on line 2**. The manual's line-2 examples
- * corroborate the longer limit with two visible cuts:
- *
- * - `DISTANCE REMAINING` -> `DISTANCE REM`
- * - `STAY SAME ROAD` -> `STAY SAME RD`
- *
- * Sending 17 characters means the tail is clipped on both rows. Line 1 must be
- * capped at 10; line 2 at 12. See [RowChars].
- */
+
 object RowChars {
-    /** Ntorq physical line 1, confirmed by the rider. */
     const val NTORQ_LINE_1 = 10
-
-    /** Ntorq physical line 2, confirmed by the rider and shown in TVS's manual. */
     const val NTORQ_LINE_2 = 12
-
-    /** Longest Ntorq row, retained for the legacy single-row path. */
     const val NTORQ = NTORQ_LINE_2
-
-    /**
-     * The Jupiter's row, kept for the Jupiter driver.
-     *
-     * The 17-byte payload is the frame shape both clusters accept; only the
-     * usable characters differ, so this changes how much text is *sent*, never
-     * how the frame is laid out.
-     */
     const val JUPITER = 17
 }
