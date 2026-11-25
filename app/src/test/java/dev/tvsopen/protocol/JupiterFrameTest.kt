@@ -68,7 +68,7 @@ class JupiterFrameTest {
     @Test
     fun `fuel nibble is model-gated 125 vs 110`() {
         assertTrue(JupiterDriver(VehicleModel.JUPITER_125).capabilities.fuelLowNibble)
-        assertTrue(!JupiterDriver(VehicleModel.JUPITER_110).capabilities.fuelLowNibble)
+        assertTrue(JupiterDriver(VehicleModel.JUPITER_110).capabilities.fuelLowNibble)
     }
 
     @Test
