@@ -1,9 +1,3 @@
-// Small persisted settings that outlive the process.
-//
-// Separate from ui.theme.ThemePrefs because these affect behaviour rather than
-// appearance, and the ride state in particular is read by a BroadcastReceiver
-// that runs with no UI and no Activity.
-
 package dev.tvsopen.prefs
 
 import android.content.Context
@@ -15,19 +9,12 @@ class RidePrefs private constructor(private val ctx: Context) {
 
     private val sp = ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
-    /** Observable for Compose. */
     var rideMode by mutableStateOf(sp.getBoolean(KEY_RIDE_MODE, false))
         private set
 
-    /** True when the user opted into reconnecting after a reboot. */
     var resumeOnBoot by mutableStateOf(sp.getBoolean(KEY_RESUME_BOOT, false))
         private set
 
-    /**
-     * Named `updateX`, not `setX`: a `private set` on a delegated `var` already
-     * generates a `setX(Z)V` method, so a `fun setRideMode(Boolean)` collides
-     * with it at the JVM signature level and fails the build.
-     */
     fun updateRideMode(on: Boolean) {
         rideMode = on
         sp.edit().putBoolean(KEY_RIDE_MODE, on).apply()
@@ -38,11 +25,6 @@ class RidePrefs private constructor(private val ctx: Context) {
         sp.edit().putBoolean(KEY_RESUME_BOOT, on).apply()
     }
 
-    /**
-     * Last link the service established, for reconnect-after-reboot. Plain
-     * getters, not observable state: only MainActivity reads them once at
-     * startup, and SharedPreferences is the source of truth.
-     */
     val lastAddress: String?
         get() = sp.getString(KEY_LAST_ADDRESS, null)
 
@@ -56,49 +38,40 @@ class RidePrefs private constructor(private val ctx: Context) {
             .apply()
     }
 
-    /** Explicit user's selection from the scan row; survives later rediscovery. */
     fun updateSelectedModel(address: String, modelId: String) {
         sp.edit().putString(modelKey(address), modelId).apply()
     }
 
     fun selectedModel(address: String): String? = sp.getString(modelKey(address), null)
 
-    /** Scan preference; default is unfiltered because the Ntorq advertises no UUID. */
     var onlySmartXonnect: Boolean
         get() = sp.getBoolean(KEY_ONLY_SMART_XONNECT, false)
         set(value) { sp.edit().putBoolean(KEY_ONLY_SMART_XONNECT, value).apply() }
 
-    /** Navigation mirroring is the product default; preserve an explicit opt-out. */
     var navigationMirroring: Boolean
         get() = sp.getBoolean(KEY_NAVIGATION_MIRRORING, true)
         set(value) { sp.edit().putBoolean(KEY_NAVIGATION_MIRRORING, value).apply() }
 
-    /** Mirror incoming phone calls to the cluster (caller name/number). */
     var mirrorPhoneCalls: Boolean
         get() = sp.getBoolean(KEY_MIRROR_PHONE_CALLS, true)
         set(value) { sp.edit().putBoolean(KEY_MIRROR_PHONE_CALLS, value).apply() }
 
-    /** Extra maps packages the rider added in More, beyond the built-in list. */
     var extraMapsPackages: Set<String>
         get() = sp.getStringSet(KEY_EXTRA_MAPS_PACKAGES, emptySet()) ?: emptySet()
         set(value) { sp.edit().putStringSet(KEY_EXTRA_MAPS_PACKAGES, value).apply() }
 
-    /** Apps whose notifications are mirrored as messages, in addition to the built-in list. */
     var extraMessagePackages: Set<String>
         get() = sp.getStringSet(KEY_EXTRA_MESSAGE_PACKAGES, emptySet()) ?: emptySet()
         set(value) { sp.edit().putStringSet(KEY_EXTRA_MESSAGE_PACKAGES, value).apply() }
 
-    /** Apps whose call notifications are mirrored, in addition to the built-in list. */
     var extraCallPackages: Set<String>
         get() = sp.getStringSet(KEY_EXTRA_CALL_PACKAGES, emptySet()) ?: emptySet()
         set(value) { sp.edit().putStringSet(KEY_EXTRA_CALL_PACKAGES, value).apply() }
 
-    /** Mirror any app's notifications, not just known maps/message/call apps. */
     var mirrorAnyAppNotifications: Boolean
         get() = sp.getBoolean(KEY_MIRROR_ANY_APP_NOTIFICATIONS, false)
         set(value) { sp.edit().putBoolean(KEY_MIRROR_ANY_APP_NOTIFICATIONS, value).apply() }
 
-    /** Keep the screen awake while the app is open — for testing only. */
     var keepScreenOn by mutableStateOf(sp.getBoolean(KEY_KEEP_SCREEN_ON, false))
         private set
 
@@ -107,12 +80,10 @@ class RidePrefs private constructor(private val ctx: Context) {
         sp.edit().putBoolean(KEY_KEEP_SCREEN_ON, on).apply()
     }
 
-    /** Mirror message/app notifications (sender and count, never the message text). */
     var mirrorMessages: Boolean
         get() = sp.getBoolean(KEY_MIRROR_MESSAGES, false)
         set(value) { sp.edit().putBoolean(KEY_MIRROR_MESSAGES, value).apply() }
 
-    /** Local profile name; UI can edit it without sending an unverified packet. */
     var riderName: String?
         get() = sp.getString(KEY_RIDER_NAME, null)
         set(value) {
@@ -122,7 +93,26 @@ class RidePrefs private constructor(private val ctx: Context) {
             }.apply()
         }
 
-    /** Last known parked spot, recorded locally when the link drops. */
+    var clusterBrightness: Int
+        get() = sp.getInt(KEY_CLUSTER_BRIGHTNESS, 3)
+        set(value) { sp.edit().putInt(KEY_CLUSTER_BRIGHTNESS, value).apply() }
+
+    var followMeTimerSec: Int?
+        get() = if (sp.contains(KEY_FOLLOW_ME_SEC)) sp.getInt(KEY_FOLLOW_ME_SEC, 0) else null
+        set(value) {
+            sp.edit().apply {
+                if (value == null) remove(KEY_FOLLOW_ME_SEC) else putInt(KEY_FOLLOW_ME_SEC, value)
+            }.apply()
+        }
+
+    var idleStopTimerSec: Int?
+        get() = if (sp.contains(KEY_IDLE_STOP_SEC)) sp.getInt(KEY_IDLE_STOP_SEC, 10) else null
+        set(value) {
+            sp.edit().apply {
+                if (value == null) remove(KEY_IDLE_STOP_SEC) else putInt(KEY_IDLE_STOP_SEC, value)
+            }.apply()
+        }
+
     var parkedAtMillis: Long
         get() = sp.getLong(KEY_PARKED_AT, 0L)
         private set(value) { sp.edit().putLong(KEY_PARKED_AT, value).apply() }
@@ -145,6 +135,9 @@ class RidePrefs private constructor(private val ctx: Context) {
         private const val KEY_LAST_ADDRESS = "last_address"
         private const val KEY_LAST_MODEL = "last_model"
         private const val KEY_RIDER_NAME = "rider_name"
+        private const val KEY_CLUSTER_BRIGHTNESS = "cluster_brightness"
+        private const val KEY_FOLLOW_ME_SEC = "follow_me_sec"
+        private const val KEY_IDLE_STOP_SEC = "idle_stop_sec"
         private const val KEY_ONLY_SMART_XONNECT = "only_smart_xonnect"
         private const val KEY_NAVIGATION_MIRRORING = "navigation_mirroring"
         private const val KEY_MIRROR_PHONE_CALLS = "mirror_phone_calls"
