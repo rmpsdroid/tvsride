@@ -717,9 +717,11 @@ private fun ClusterControlsCard(
     onSetBrightness: (Int) -> Unit,
     onSetCalibration: (command: Int, seconds: Int) -> Unit,
 ) {
-    var brightness by remember { mutableStateOf(3) }
-    var followMeSec by remember { mutableStateOf<Int?>(null) }
-    var idleStopSec by remember { mutableStateOf<Int?>(null) }
+    val ctx = LocalContext.current
+    val prefs = remember { RidePrefs.load(ctx) }
+    var brightness by remember { mutableStateOf(prefs.clusterBrightness) }
+    var followMeSec by remember { mutableStateOf(prefs.followMeTimerSec) }
+    var idleStopSec by remember { mutableStateOf(prefs.idleStopTimerSec) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -739,6 +741,7 @@ private fun ClusterControlsCard(
                         enabled = connected,
                         onClick = {
                             brightness = lvl
+                            prefs.clusterBrightness = lvl
                             onSetBrightness(lvl)
                         },
                         label = { Text("$lvl") },
@@ -756,6 +759,7 @@ private fun ClusterControlsCard(
                         enabled = connected,
                         onClick = {
                             followMeSec = sec
+                            prefs.followMeTimerSec = sec
                             onSetCalibration(
                                 ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
                                 sec,
@@ -776,6 +780,7 @@ private fun ClusterControlsCard(
                         enabled = connected,
                         onClick = {
                             idleStopSec = sec
+                            prefs.idleStopTimerSec = sec
                             onSetCalibration(
                                 ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
                                 sec,
