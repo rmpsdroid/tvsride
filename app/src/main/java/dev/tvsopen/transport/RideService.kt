@@ -588,7 +588,11 @@ class RideService : android.app.Service() {
         if (reconnectJob?.isActive == true) return
         val attempt = reconnectAttempt
         reconnectAttempt++
-        val wait = RECONNECT_DELAYS_MS[attempt.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
+        val wait = when {
+            attempt < RECONNECT_DELAYS_MS.size -> RECONNECT_DELAYS_MS[attempt]
+            attempt < 34 -> 60_000L
+            else -> 180_000L
+        }
         Log.i(TAG, "unexpected drop; reconnect #${attempt + 1} in ${wait}ms")
         reconnectJob = scope.launch {
             delay(wait)
@@ -600,7 +604,7 @@ class RideService : android.app.Service() {
                 if (!tearingDown) scheduleReconnect(address, model)
             }
         }
-    } 
+    }
     
     private fun teardown() {
         tearingDown = true
