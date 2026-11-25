@@ -251,60 +251,51 @@ object Session {
      * (say `0x19`, once a second) does not blank values that arrived with the
      * fast `0x10` stream.
      */
+    
     fun onFrame(frame: DecodedFrame) {
         val now = System.currentTimeMillis()
 
-        // Raw integer divided once, here, into a Double — never an Int, so a
-        // 7.3 s 0-60 run does not become 7, and a 3098.0 km odometer does not
-        // become 3098 and then 309. (It did both of those before the driver
-        // stopped pre-scaling in decode.)
         fun scaled(name: Field, div: Double): Double? =
             frame.field(name)?.let { it / div }
 
         val cur = _telemetry.value
-        // The fuel byte's meaning is model-gated: the 125 family extracts the
-        // low nibble, the 110 family passes the raw byte through (dex-verified
-        // split behind JUPITER_U566). Read it from the current driver rather
-        // than hardcoding the Ntorq rule for every model.
         val fuelLowNibble = DriverRegistry.forModel(_connection.value.model)
             .capabilities.fuelLowNibble
         _telemetry.value = when (frame.dataId) {
-            0x10 -> cur.copy(
-                speedKmh = frame.field(Field.SPEED)?.toInt() ?: cur.speedKmh,
-                odometerKm = scaled(Field.ODOMETER, 10.0) ?: cur.odometerKm,
-                // Baseline for "this connection", from the first frame that
-                // carries an odometer — see onConnection, which clears it.
-                odometerAtConnectKm = cur.odometerAtConnectKm
-                    ?: scaled(Field.ODOMETER, 10.0),
-                // Fuel is the low nibble of index 6 — that is exactly what the
-                // official app does (NtorqSpeedOMeter1.getFuelLevel takes the last
-                // hex character), and this app matches it. The decode is right;
-                // the bar interpretation is not.
-                //
-                // The cluster's own gauge has SIX bars per TVS's manual, and the
-                // raw value transmitted while the dash was photographed reading
-                // FUEL EMPTY was 7. A six-bar gauge cannot represent 7, so 7 is
-                // not a bar count. Clamping it to 6 — what this used to do —
-                // displayed a FULL tank on an empty one.
-                //
-                // So an out-of-range value is dropped rather than clamped, and
-                // the gauge says so. A genuine 0..6 still renders normally.
-                // Note the absence of `?: cur.fuelBars`: a rejected reading has
-                // to clear the previous one, not leave a stale level on screen.
-                fuelBars = frame.field(Field.FUEL_LEVEL)?.toInt()
-                    ?.let { if (fuelLowNibble) it and 0x0F else it }
-                    ?.takeIf { it in 0..Telemetry.FUEL_BAR_MAX },
-                averageSpeedKmh = frame.field(Field.AVERAGE_SPEED)?.toInt() ?: cur.averageSpeedKmh,
-                tripStatus = frame.field(Field.TRIP_STATUS)?.toInt() ?: cur.tripStatus,
-                topSpeedKmh = frame.field(Field.TOP_SPEED)?.toInt() ?: cur.topSpeedKmh,
-                throttlePercent = scaled(Field.THROTTLE_POSITION, 2.0)?.toInt()
-                    ?: cur.throttlePercent,
-                timeTo60Sec = scaled(Field.TIME_60KMPH, 10.0)
-                    ?: cur.timeTo60Sec,
-                tripFMeters = scaled(Field.TRIP_F_METER, 10.0)?.toInt() ?: cur.tripFMeters,
-                engineRpm = frame.field(Field.ENGINE_RPM)?.toInt() ?: cur.engineRpm,
-                lastFrameAt = now,
-            ).also { trackRideDistance() }
+            0x10 -> {
+                val speed = frame.field(Field.SPEED)?.toInt() ?: cur.speedKmh
+                val sw = frame.field(Field.SWITCH_STATUS)?.toInt() ?: 0
+                val odo = scaled(Field.ODOMETER, 10.0) ?: cur.odometerKm
+                // 0x40 (64) or 0x80 (128) in byte 12 indicates key/ignition state transition on Jupiter.
+                if (sw == 0x40 || sw == 0x80) {
+                    rideLog?.finish()
+                    _totalRides.value = rideLog?.totalRides ?: _totalRides.value
+                    _totalRideDistanceKm.value = rideLog?.totalDistanceKm ?: _totalRideDistanceKm.value
+                } else if ((speed ?: 0) > 0 && _rides.value.none { it.endedAtMillis == null }) {
+                    _telemetry.value = cur.copy(odometerAtConnectKm = odo)
+                    rideLog?.start()
+                }
+                cur.copy(
+                    speedKmh = speed,
+                    odometerKm = odo,
+                    odometerAtConnectKm = _telemetry.value.odometerAtConnectKm
+                        ?: cur.odometerAtConnectKm
+                        ?: odo,
+                    fuelBars = frame.field(Field.FUEL_LEVEL)?.toInt()
+                        ?.let { if (fuelLowNibble) it and 0x0F else it }
+                        ?.takeIf { it in 0..Telemetry.FUEL_BAR_MAX },
+                    averageSpeedKmh = frame.field(Field.AVERAGE_SPEED)?.toInt() ?: cur.averageSpeedKmh,
+                    tripStatus = frame.field(Field.TRIP_STATUS)?.toInt() ?: cur.tripStatus,
+                    topSpeedKmh = frame.field(Field.TOP_SPEED)?.toInt() ?: cur.topSpeedKmh,
+                    throttlePercent = scaled(Field.THROTTLE_POSITION, 2.0)?.toInt()
+                        ?: cur.throttlePercent,
+                    timeTo60Sec = scaled(Field.TIME_60KMPH, 10.0)
+                        ?: cur.timeTo60Sec,
+                    tripFMeters = scaled(Field.TRIP_F_METER, 10.0)?.toInt() ?: cur.tripFMeters,
+                    engineRpm = frame.field(Field.ENGINE_RPM)?.toInt() ?: cur.engineRpm,
+                    lastFrameAt = now,
+                ).also { trackRideDistance() }
+            }
 
             0x11 -> cur.copy(
                 serviceDue = (frame.field(Field.SERVICE_REMINDER)?.toInt()?.let { it != 0 })
