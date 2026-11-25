@@ -115,6 +115,7 @@ class MapsNotificationListener : NotificationListenerService() {
             pkg == "android" || pkg.startsWith("com.android.") ||
             pkg.startsWith("com.samsung.android.app.routines") ||
             pkg.startsWith("com.samsung.android.lool") ||
+            pkg.startsWith("com.samsung.android.incallui") ||
             pkg.startsWith("com.sec.android.") ||
             pkg == "com.google.android.gms"
 
