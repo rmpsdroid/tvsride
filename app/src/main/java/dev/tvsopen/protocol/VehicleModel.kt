@@ -76,7 +76,7 @@ enum class VehicleModel(
                 // The rider's own cluster is the 125. Name-only detection had
                 // been naming it "Ntorq 150 (SX)" since before the 125 existed.
                 n.contains("NTORQ") -> NTORQ_125_RACE
-                n.contains("JUPITER") -> JUPITER_110
+                n.contains("JUPITER") || n.startsWith("TVSBT2000") -> JUPITER_110
                 n.contains("APACHE") -> APACHE_160
                 n.contains("RAIDER") -> RAIDER_125
                 n.contains("IQUBE") -> IQUBE
