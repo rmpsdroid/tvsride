@@ -271,7 +271,7 @@ object Session {
                     rideLog?.finish()
                     _totalRides.value = rideLog?.totalRides ?: _totalRides.value
                     _totalRideDistanceKm.value = rideLog?.totalDistanceKm ?: _totalRideDistanceKm.value
-                } else if ((speed ?: 0) > 0 && _rides.value.none { it.endedAtMillis == null }) {
+                } else if ((speed ?: 0) > 0 && _rides.value.none { it.inProgress }) {
                     _telemetry.value = cur.copy(odometerAtConnectKm = odo)
                     rideLog?.start()
                 }
