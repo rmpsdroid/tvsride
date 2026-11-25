@@ -558,30 +558,22 @@ class RideService : android.app.Service() {
     private fun scheduleReconnect(address: String, model: VehicleModel) {
         if (tearingDown) return
         if (reconnectJob?.isActive == true) return
-        if (reconnectAttempt >= RECONNECT_DELAYS_MS.size) {
-            Log.w(TAG, "giving up after ${RECONNECT_DELAYS_MS.size} reconnect attempts")
-            return
-        }
         val attempt = reconnectAttempt
         reconnectAttempt++
-        val wait = RECONNECT_DELAYS_MS[attempt]
-        Log.i(TAG, "unexpected drop; reconnect ${attempt + 1}/${RECONNECT_DELAYS_MS.size} in ${wait}ms")
+        val wait = RECONNECT_DELAYS_MS[attempt.coerceAtMost(RECONNECT_DELAYS_MS.lastIndex)]
+        Log.i(TAG, "unexpected drop; reconnect #${attempt + 1} in ${wait}ms")
         reconnectJob = scope.launch {
             delay(wait)
             if (ble?.state?.value == ConnectionState.CONNECTED) return@launch
             val attemptBefore = reconnectAttempt
             connect(address, model)
-            // connect() clears the counter for a deliberate new link. This was
-            // a retry, so restore the escalated value or every retry fires
-            // after 5 s and the give-up limit is never reached. Re-arm when a
-            // reconnect could not even start — otherwise retrying stops dead.
             if (ble?.state?.value != ConnectionState.CONNECTED) {
                 reconnectAttempt = attemptBefore
                 if (!tearingDown) scheduleReconnect(address, model)
             }
         }
-    }
-
+    } 
+    
     private fun teardown() {
         tearingDown = true
         reconnectJob?.cancel()
