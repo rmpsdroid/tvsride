@@ -52,10 +52,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.tvsopen.Nucleus
 import dev.tvsopen.data.DataExport
 import dev.tvsopen.prefs.RidePrefs
+import dev.tvsopen.protocol.ClusterFrames
 import dev.tvsopen.protocol.Confidence
 import dev.tvsopen.protocol.Pictograms
 import dev.tvsopen.session.Ride
 import dev.tvsopen.session.Session
+import dev.tvsopen.transport.ConnectionState
 import dev.tvsopen.transport.label
 import dev.tvsopen.ui.theme.ThemeMode
 import dev.tvsopen.ui.theme.ThemePrefs
@@ -67,13 +69,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
-/**
- * More / settings screen.
- *
- * The transparency panel is the important part: it states exactly which
- * protocol facts are verified and which still await hardware confirmation, so
- * a user reading this app knows what they can trust.
- */
 @Composable
 fun MoreScreen(
     connection: dev.tvsopen.session.ConnectionState1,
@@ -85,6 +80,8 @@ fun MoreScreen(
     onOpenNotificationAccess: () -> Unit,
     onScan: () -> Unit,
     onDisconnect: () -> Unit,
+    onSetBrightness: (Int) -> Unit = {},
+    onSetCalibration: (command: Int, seconds: Int) -> Unit = { _, _ -> },
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -110,14 +107,20 @@ fun MoreScreen(
         item { RiderNameCard(name = riderName, onNameChange = onRiderNameChange) }
 
         item {
+            ClusterControlsCard(
+                connected = connection.state == ConnectionState.CONNECTED,
+                onSetBrightness = onSetBrightness,
+                onSetCalibration = onSetCalibration,
+            )
+        }
+
+        item {
             Text("RIDES", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         item {
-            // Collected here, not in MainActivity: ride distance changes with
-            // telemetry, and hoisting it recomposed the entire More screen.
             val rides by Session.rides.collectAsStateWithLifecycle()
             val totalRides by Session.totalRides.collectAsStateWithLifecycle()
             val totalDistanceKm by Session.totalRideDistanceKm.collectAsStateWithLifecycle()
@@ -165,7 +168,6 @@ fun MoreScreen(
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(connection.model.displayName, style = MaterialTheme.typography.titleMedium)
-                    // .label, not the enum name: this printed "CONNECTING".
                     Text("State: ${connection.state.label}")
                     connection.address?.let { Text("MAC: $it") }
                     Spacer(Modifier.height(8.dp))
@@ -470,10 +472,8 @@ fun MoreScreen(
     }
 }
 
-/** An installed app the rider can pick as a navigation source. */
 private data class InstalledApp(val label: String, val packageName: String)
 
-/** Compact entry point; the heavy picker only opens on demand. */
 @Composable
 private fun ExtraPackageCard(
     title: String,
@@ -510,7 +510,6 @@ private fun ExtraPackageCard(
     }
 }
 
-/** On-demand picker. Package enumeration is I/O and runs off the main thread. */
 @Composable
 private fun PackagePickerDialog(
     title: String,
@@ -547,8 +546,6 @@ private fun PackagePickerDialog(
         val pool = if (query.isEmpty()) {
             installed.filter { app ->
                 val text = "${app.label} ${app.packageName}".lowercase()
-                // The "nav" hint also matches Android's own "Navigation Bar"
-                // system components, which cannot post a useful notification.
                 !app.packageName.startsWith("com.android.internal") &&
                     !text.contains("navigation bar") &&
                     !text.contains("navbar") &&
@@ -653,7 +650,6 @@ private fun PackagePickerDialog(
     )
 }
 
-/** Testing aid: keeps the screen awake while the app is open. */
 @Composable
 private fun KeepScreenOnCard(enabled: Boolean, onChange: (Boolean) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
@@ -715,19 +711,85 @@ private fun RiderNameCard(name: String?, onNameChange: (String?) -> Unit) {
     }
 }
 
+@Composable
+private fun ClusterControlsCard(
+    connected: Boolean,
+    onSetBrightness: (Int) -> Unit,
+    onSetCalibration: (command: Int, seconds: Int) -> Unit,
+) {
+    var brightness by remember { mutableStateOf(3) }
+    var followMeSec by remember { mutableStateOf<Int?>(null) }
+    var idleStopSec by remember { mutableStateOf<Int?>(null) }
 
-/**
- * Doze exemption.
- *
- * This is the difference between a working app and one that dies mid-ride. Doze
- * suspends the GATT client within minutes of the screen going off, the
- * presence packet stops, and the cluster drops the link. The working Jupiter
- * companion asks for the same exemption.
- *
- * Android has no runtime dialog for this one — it is granted in system settings
- * or via the request intent — so the card states the state plainly and links
- * out, rather than pretending a button can do it.
- */
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Cluster controls", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (connected) "Applies immediately on your Jupiter cluster."
+                else "Connect to your scooter to adjust brightness and timers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text("Backlight brightness", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                (1..5).forEach { lvl ->
+                    FilterChip(
+                        selected = brightness == lvl,
+                        enabled = connected,
+                        onClick = {
+                            brightness = lvl
+                            onSetBrightness(lvl)
+                        },
+                        label = { Text("$lvl") },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            HorizontalDivider()
+            Text("Follow-Me Headlamp timer", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0 to "Off", 10 to "10s", 20 to "20s", 30 to "30s").forEach { (sec, lbl) ->
+                    FilterChip(
+                        selected = followMeSec == sec,
+                        enabled = connected,
+                        onClick = {
+                            followMeSec = sec
+                            onSetCalibration(
+                                ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
+                                sec,
+                            )
+                        },
+                        label = { Text(lbl) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            HorizontalDivider()
+            Text("Idle Start-Stop (iGO Assist) timer", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(5 to "5s", 10 to "10s", 15 to "15s", 20 to "20s").forEach { (sec, lbl) ->
+                    FilterChip(
+                        selected = idleStopSec == sec,
+                        enabled = connected,
+                        onClick = {
+                            idleStopSec = sec
+                            onSetCalibration(
+                                ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
+                                sec,
+                            )
+                        },
+                        label = { Text(lbl) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun DozeCard() {
     val ctx = LocalContext.current
@@ -735,8 +797,6 @@ private fun DozeCard() {
     var exempt by remember { mutableStateOf(isDozeExempt(ctx)) }
     val prefs = remember { RidePrefs.load(ctx) }
 
-    // Re-read on every resume, not once. The grant happens in system settings,
-    // so `remember` alone kept reporting "not exempt" until the process died.
     LifecycleResumeEffect(Unit) {
         exempt = isDozeExempt(ctx)
         onPauseOrDispose { }
@@ -773,7 +833,6 @@ private fun DozeCard() {
                             )
                         }
                     }
-                    // Re-read after the settings round-trip.
                     scope.launch {
                         delay(1500)
                         exempt = isDozeExempt(ctx)
@@ -850,20 +909,12 @@ private fun RidesCard(rides: List<Ride>, totalRides: Int, totalDistanceKm: Doubl
     }
 }
 
-/** True when this package is on the battery-optimisation allowlist. */
 private fun isDozeExempt(ctx: Context): Boolean {
     val pm = ctx.getSystemService(android.os.PowerManager::class.java) ?: return false
     return runCatching { pm.isIgnoringBatteryOptimizations(ctx.packageName) }
         .getOrDefault(false)
 }
 
-/**
- * Light / Dark / Auto.
- *
- * A segmented row rather than a switch: the middle option is "follow the
- * system", and a boolean cannot express three states without lying about one
- * of them.
- */
 @Composable
 private fun AppearanceCard() {
     val ctx = LocalContext.current
