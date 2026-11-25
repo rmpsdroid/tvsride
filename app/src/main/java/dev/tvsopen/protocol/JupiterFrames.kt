@@ -174,7 +174,7 @@ class JupiterDriver(
         keepalive = true,
         // Dex-verified split behind JUPITER_U566: the 125 extracts the low
         // nibble of the fuel byte, the 110 passes the raw byte through.
-        fuelLowNibble = model == VehicleModel.JUPITER_125,
+        fuelLowNibble = true,
     )
 
     override fun confidence() = mapOf(
