@@ -170,6 +170,15 @@ class RideService : android.app.Service() {
             ACTION_START_NAV -> bridge?.startNavigation()
             ACTION_STOP_NAV -> bridge?.stopNavigation()
             ACTION_UPDATE_RIDER_NAME -> sendRiderNameIfConnected()
+            ACTION_SET_BRIGHTNESS -> {
+                val level = intent.getIntExtra(EXTRA_VALUE, 3)
+                sendBrightnessIfConnected(level)
+            }
+            ACTION_SET_CALIBRATION -> {
+                val cmd = intent.getIntExtra(EXTRA_CAL_CMD, -1)
+                val seconds = intent.getIntExtra(EXTRA_VALUE, 0)
+                if (cmd >= 0) sendCalibrationIfConnected(cmd, seconds)
+            }
             ACTION_DISCONNECT -> {
                 teardown()
                 stopSelf()
@@ -441,6 +450,25 @@ class RideService : android.app.Service() {
         }
     }
 
+    private fun sendBrightnessIfConnected(level: Int) {
+        val transport = ble ?: return
+        val drv = driver ?: return
+        if (transport.state.value != ConnectionState.CONNECTED) return
+        val frame = drv.buildBrightness(level) ?: return
+        scope.launch {
+            if (transport.write(frame)) Log.i(TAG, "cluster brightness set to $level")
+        }
+    }
+
+    private fun sendCalibrationIfConnected(command: Int, value: Int) {
+        val transport = ble ?: return
+        if (transport.state.value != ConnectionState.CONNECTED) return
+        val frame = dev.tvsopen.protocol.ClusterFrames.calibration(command, value)
+        scope.launch {
+            if (transport.write(frame)) Log.i(TAG, "calibration cmd=$command val=$value sent")
+        }
+    }
+
     private suspend fun sendAlert(
         driver: ProtocolDriver,
         transport: ScooterBleService,
@@ -666,6 +694,10 @@ class RideService : android.app.Service() {
         const val ACTION_START_NAV = "dev.tvsopen.START_NAV"
         const val ACTION_STOP_NAV = "dev.tvsopen.STOP_NAV"
         const val ACTION_UPDATE_RIDER_NAME = "dev.tvsopen.UPDATE_RIDER_NAME"
+        const val ACTION_SET_BRIGHTNESS = "dev.tvsopen.SET_BRIGHTNESS"
+        const val ACTION_SET_CALIBRATION = "dev.tvsopen.SET_CALIBRATION"
+        const val EXTRA_CAL_CMD = "cal_cmd"
+        const val EXTRA_VALUE = "value"
         const val ACTION_DISCONNECT = "dev.tvsopen.DISCONNECT"
 
         const val EXTRA_ADDRESS = "address"
