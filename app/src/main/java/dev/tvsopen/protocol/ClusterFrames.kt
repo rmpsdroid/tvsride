@@ -157,6 +157,7 @@ object ClusterFrames {
      * There is no checksum: the frame is exempt from the phone-side formula,
      * same as the navigation control frame.
      */
+
     fun vehicleControl(level: Int, calendar: Calendar = Calendar.getInstance()): ByteArray {
         val l = level.coerceIn(1, 5)
         val b = ByteArray(SIZE)
@@ -166,7 +167,13 @@ object ClusterFrames {
         b[3] = 9
         b[4] = 0
         b[5] = 2
+        var hour12 = calendar.get(Calendar.HOUR)
+        if (hour12 == 0) hour12 = 12
+        b[6] = hour12.toByte()
+        b[7] = calendar.get(Calendar.MINUTE).toByte()
+        b[8] = calendar.get(Calendar.SECOND).toByte()
         b[9] = calendar.get(Calendar.DAY_OF_MONTH).toByte()
+        b[10] = if (calendar.get(Calendar.AM_PM) == Calendar.PM) 1 else 0
         b[11] = calendar.get(Calendar.MONTH).toByte() // zero-based by design
         b[13] = (calendar.get(Calendar.YEAR) and 0xFF).toByte()
         b[15] = 1
