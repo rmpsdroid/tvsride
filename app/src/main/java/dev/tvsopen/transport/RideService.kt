@@ -460,7 +460,7 @@ class RideService : android.app.Service() {
                 val name = alert.title.takeIf { it.isNotBlank() && it != number }
                 val frames = driver.buildCallerFrames(number, null, name)
                 if (frames.isNotEmpty()) {
-                    Log.i(TAG, "cluster call alert: '$name' '$number' (${frames.size} frames)")
+                    Log.i(TAG, "cluster call alert sent (${frames.size} frames; caller details redacted)")
                     frames.forEach { transport.write(it) }
                 } else {
                     val text = if (name != null) "$name $number" else number.ifBlank { alert.title }
