@@ -164,10 +164,10 @@ class RideService : android.app.Service() {
         bridge?.stopNavigation()
 
         enterForeground()
-        // Close and discard any previous ScooterBleService instance so Android
-        // allocates a clean BluetoothGatt handle instead of hitting stale client errors.
         ble?.let { old ->
-            runCatching { old.disconnect() }
+            scope.launch(NonCancellable) {
+                runCatching { old.disconnect() }
+            }
         }
         ble = null
         val transport = ScooterBleService(applicationContext).also { ble = it }
