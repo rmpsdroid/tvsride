@@ -1,9 +1,3 @@
-// Single source of truth for the UI.
-//
-// The Compose screens must not reach into the BLE service directly: a GATT
-// callback has no business knowing a ViewModel exists. Everything the UI shows
-// is published here as StateFlow, and the service pushes into it.
-
 package dev.tvsopen.session
 
 import android.content.Context
@@ -17,14 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * Live telemetry, derived from decoded inbound frames.
- *
- * `avgEconomyKmpl` and `distanceToEmptyKm` are decoded but deliberately not
- * surfaced on the dashboard: TVS's Ntorq 125 manual lists every display
- * element the cluster has, and neither range nor fuel economy is one of them.
- * They are phone-app or cloud figures, and this app has no cloud.
- */
 data class Telemetry(
     val speedKmh: Int? = null,            // SM1 idx 2
     val odometerKm: Double? = null,       // SM1 idx 3..5, /10
@@ -37,9 +23,7 @@ data class Telemetry(
     val tripFMeters: Int? = null,         // SM1 idx 14..16, /10
     val engineRpm: Int? = null,           // SM1 idx 17..18
     val serviceDue: Boolean? = null,      // SM2 idx 4
-    /** MIL / check-engine lamp, from 0x11 diagnostics byte bit 2. */
     val milOn: Boolean? = null,
-    /** Blink-code count from 0x11 byte 8 when the MIL is reporting a fault. */
     val milBlinkCode: Int? = null,
     val softwareVersion: String? = null,  // SM2 idx 7
     val avgEconomyKmpl: Int? = null,      // SM3 idx 8
@@ -48,20 +32,8 @@ data class Telemetry(
     val engineTempC: Int? = null,         // SM4 idx 8
     val batteryVoltage: Int? = null,      // SM4 idx 11
     val lastFrameAt: Long = 0L,
-    /**
-     * Odometer reading when this link was established.
-     *
-     * The official app shows "Connected Distance" on its Vehicle Overview, but
-     * that is computed server-side from ride records. We have no cloud, so this
-     * is the same number done locally: odometer now minus odometer at connect.
-     */
     val odometerAtConnectKm: Double? = null,
 ) {
-    /**
-     * Distance travelled on this connection, or null when it cannot be known —
-     * either no odometer yet, or the bike appears to have gone backwards
-     * (a reset or a cluster swap), which must not report as a negative ride.
-     */
     fun connectedDistanceKm(): Double? {
         val start = odometerAtConnectKm ?: return null
         val now = odometerKm ?: return null
@@ -69,19 +41,15 @@ data class Telemetry(
         return if (d >= 0) d else null
     }
 
-    /** No frames for this long means the link is stale, not merely idle. */
     fun isFresh(now: Long = System.currentTimeMillis()): Boolean =
         lastFrameAt > 0 && now - lastFrameAt < STALE_AFTER_MS
 
     companion object {
         const val STALE_AFTER_MS = 10_000L
-
-        /** Bars in the Ntorq 125 cluster's fuel gauge. TVS manual, section 1c. */
         const val FUEL_BAR_MAX = 6
     }
 }
 
-/** What the cluster is displaying right now. */
 data class HudState(
     val active: Boolean = false,
     val instructionTitle: String? = null,
@@ -94,18 +62,10 @@ data class HudState(
     val lastError: String? = null,
 )
 
-/**
- * A call or message to mirror on the cluster.
- *
- * [subtitle] carries the number or a short source label (e.g. "WhatsApp").
- * The message text itself is never included: the cluster gets a name and a
- * count, not the content.
- */
 data class ClusterAlert(
     val kind: Kind,
     val title: String,
     val subtitle: String = "",
-    /** Source notification key, so removal clears only the alert it posted. */
     val key: String = "",
 ) {
     enum class Kind { CALL, MESSAGE }
@@ -117,27 +77,12 @@ data class ConnectionState1(
     val address: String? = null,
 )
 
-/**
- * Where the scooter was last seen.
- *
- * There is no cloud in this project, so this cannot be a server-side record.
- * It is written locally when the phone has a fix while the cluster is connected,
- * and it never leaves the device — there is no permission that would let it.
- */
 data class ParkedInfo(
     val atMillis: Long,
     val label: String? = null,
     val distanceMeters: Int? = null,
 )
 
-/**
- * Session store.
- *
- * Mutable rather than a ViewModel: the BLE service and the notification
- * listener are framework components with their own lifecycles, and neither can
- * easily hold a ViewModel. A process-scoped singleton they can both write to is
- * simpler and has no lifecycle trap.
- */
 object Session {
 
     private val _telemetry = MutableStateFlow(Telemetry())
@@ -158,14 +103,11 @@ object Session {
     private val _rideMode = MutableStateFlow(false)
     val rideMode: StateFlow<Boolean> = _rideMode.asStateFlow()
 
-    /**
-     * Local ride log, created once the Activity supplies a Context.
-     *
-     * Nullable rather than injected so `Session` stays usable from a
-     * BroadcastReceiver that has no Activity to construct it with.
-     */
     @Volatile
     private var rideLog: RideLog? = null
+
+    @Volatile
+    private var lastDisconnectAt: Long = 0L
 
     private val _rides = MutableStateFlow<List<Ride>>(emptyList())
     val rides: StateFlow<List<Ride>> = _rides.asStateFlow()
@@ -188,18 +130,18 @@ object Session {
         }
     }
 
-    /** Keep the open ride's distance in step with the odometer. */
+    private fun syncRideFlows() {
+        val log = rideLog ?: return
+        _rides.value = log.rides.value
+        _totalRides.value = log.totalRides
+        _totalRideDistanceKm.value = log.totalDistanceKm
+    }
+
     private fun trackRideDistance() {
         val log = rideLog ?: return
-        // connectedDistanceKm() is a Telemetry member, not a Session one, so the
-        // receiver has to be spelled out. It is null when the odometer went
-        // backwards (cluster reset/swap); substituting 0.0 here used to wipe
-        // the whole open ride when finish() folded it into the totals.
         val distance = _telemetry.value.connectedDistanceKm() ?: return
         val before = log.rides.value
         log.update(distance)
-        // RideLog only emits when the displayed tenth of a kilometre changed;
-        // mirror that change without re-publishing on every telemetry frame.
         if (log.rides.value !== before) _rides.value = log.rides.value
     }
 
@@ -224,34 +166,25 @@ object Session {
         val previous = _connection.value
         val wasConnected = previous.state == ConnectionState.CONNECTED
         val isConnected = state == ConnectionState.CONNECTED
+        val now = System.currentTimeMillis()
 
-        // Stamp the baseline on the first frame after a connect, so
-        // "Connected Distance" is measured from the start of this link.
-        // Cleared here rather than stamped: at CONNECTED time the odometer is
-        // either stale (previous link) or null (fresh install, forever — the
-        // old code stamped null once and "This connection" never recovered).
-        // onFrame fills it from the first 0x10 that carries an odometer.
         if (isConnected && !wasConnected) {
-            _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
-            rideLog?.start()
+            val isBriefReconnect = lastDisconnectAt > 0L && (now - lastDisconnectAt) < 15_000L
+            if (!isBriefReconnect) {
+                _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
+                rideLog?.start()
+                syncRideFlows()
+            }
         }
         if (!isConnected && wasConnected) {
+            lastDisconnectAt = now
             rideLog?.finish()
-            _totalRides.value = rideLog?.totalRides ?: _totalRides.value
-            _totalRideDistanceKm.value = rideLog?.totalDistanceKm ?: _totalRideDistanceKm.value
+            syncRideFlows()
         }
 
         _connection.value = ConnectionState1(state, model, address)
     }
 
-    /**
-     * Fold one decoded frame into the telemetry snapshot.
-     *
-     * Only fields the frame actually carries are overwritten, so a slow frame
-     * (say `0x19`, once a second) does not blank values that arrived with the
-     * fast `0x10` stream.
-     */
-    
     fun onFrame(frame: DecodedFrame) {
         val now = System.currentTimeMillis()
 
@@ -266,21 +199,21 @@ object Session {
                 val speed = frame.field(Field.SPEED)?.toInt() ?: cur.speedKmh
                 val sw = frame.field(Field.SWITCH_STATUS)?.toInt() ?: 0
                 val odo = scaled(Field.ODOMETER, 10.0) ?: cur.odometerKm
-                // 0x40 (64) or 0x80 (128) in byte 12 indicates key/ignition state transition on Jupiter.
-                if (sw == 0x40 || sw == 0x80) {
+                if (sw == 0x40) {
                     rideLog?.finish()
-                    _totalRides.value = rideLog?.totalRides ?: _totalRides.value
-                    _totalRideDistanceKm.value = rideLog?.totalDistanceKm ?: _totalRideDistanceKm.value
-                } else if ((speed ?: 0) > 0 && _rides.value.none { it.inProgress }) {
+                    syncRideFlows()
+                } else if (((speed ?: 0) > 0 || sw == 0x80) && _rides.value.none { it.inProgress }) {
                     _telemetry.value = cur.copy(odometerAtConnectKm = odo)
                     rideLog?.start()
+                    syncRideFlows()
                 }
-                cur.copy(
+                val baselineOdo = _telemetry.value.odometerAtConnectKm
+                    ?: cur.odometerAtConnectKm
+                    ?: odo
+                val updated = cur.copy(
                     speedKmh = speed,
                     odometerKm = odo,
-                    odometerAtConnectKm = _telemetry.value.odometerAtConnectKm
-                        ?: cur.odometerAtConnectKm
-                        ?: odo,
+                    odometerAtConnectKm = baselineOdo,
                     fuelBars = frame.field(Field.FUEL_LEVEL)?.toInt()
                         ?.let { if (fuelLowNibble) it and 0x0F else it }
                         ?.takeIf { it in 0..Telemetry.FUEL_BAR_MAX },
@@ -294,7 +227,10 @@ object Session {
                     tripFMeters = scaled(Field.TRIP_F_METER, 10.0)?.toInt() ?: cur.tripFMeters,
                     engineRpm = frame.field(Field.ENGINE_RPM)?.toInt() ?: cur.engineRpm,
                     lastFrameAt = now,
-                ).also { trackRideDistance() }
+                )
+                _telemetry.value = updated
+                trackRideDistance()
+                updated
             }
 
             0x11 -> cur.copy(
@@ -333,12 +269,10 @@ object Session {
         _hud.value = update(_hud.value)
     }
 
-    /** Post or clear the active cluster alert (call/message). */
     fun onAlert(alert: ClusterAlert?) {
         _alert.value = alert
     }
 
-    /** Clear the alert only if it was posted by [key]. */
     fun clearAlert(key: String) {
         if (_alert.value?.key == key) _alert.value = null
     }
