@@ -178,7 +178,7 @@ class RideService : android.app.Service() {
         connect(address, model)
     }
 
-    fun connect(address: String, model: VehicleModel): Boolean {
+    fun connect(address: String, model: VehicleModel, fromReconnect: Boolean = false): Boolean {
         linkJob?.cancel()
         linkJob = null
         if (!fromReconnect) {
