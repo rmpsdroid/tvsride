@@ -82,7 +82,7 @@ fun LogScreen(modifier: Modifier = Modifier) {
         ) {
             Column(Modifier.padding(12.dp)) {
                 Text(
-                    "${frameCount} frames · ${visible.size} shown" +
+                    "Build ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL} · ${frameCount} frames · ${visible.size} shown" +
                         if (minLevel > Level.DEBUG) " · tap DEBUG for raw frames" else "",
                     style = MaterialTheme.typography.labelLarge,
                 )
