@@ -147,7 +147,7 @@ fun MoreScreen(
                         val json = DataExport.buildJson(ctx)
                         val intent = Intent(Intent.ACTION_SEND).apply {
                             type = "application/json"
-                            putExtra(Intent.EXTRA_SUBJECT, "TVSRide export")
+                            putExtra(Intent.EXTRA_SUBJECT, " export")
                             putExtra(Intent.EXTRA_TEXT, json)
                         }
                         ctx.startActivity(Intent.createChooser(intent, "Export data"))
@@ -459,6 +459,11 @@ fun MoreScreen(
                 Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.Science, null)
                     Text("TVSRide", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Build ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text(
                         "No account. No TVS server. INTERNET is used for map tiles only.",
                         style = MaterialTheme.typography.bodySmall,
