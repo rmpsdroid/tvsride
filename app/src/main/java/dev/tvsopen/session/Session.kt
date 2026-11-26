@@ -10,6 +10,7 @@ import dev.tvsopen.transport.ConnectionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 data class Telemetry(
     val speedKmh: Int? = null,            // SM1 idx 2
@@ -169,20 +170,34 @@ object Session {
         val now = System.currentTimeMillis()
 
         if (isConnected && !wasConnected) {
-            val isBriefReconnect = lastDisconnectAt > 0L && (now - lastDisconnectAt) < 15_000L
-            if (!isBriefReconnect) {
-                _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
-                rideLog?.start()
+            val isBriefReconnect = lastDisconnectAt > 0L &&
+                now - lastDisconnectAt < RIDE_DISCONNECT_GRACE_MS
+            if (!isBriefReconnect && lastDisconnectAt > 0L) {
+                rideLog?.finish(lastDisconnectAt)
                 syncRideFlows()
+                _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
             }
+            lastDisconnectAt = 0L
+            android.util.Log.i("Session", "link restored (brief=$isBriefReconnect)")
         }
         if (!isConnected && wasConnected) {
             lastDisconnectAt = now
-            rideLog?.finish()
-            syncRideFlows()
+            android.util.Log.i("Session", "link lost; ride finalization pending")
         }
-
         _connection.value = ConnectionState1(state, model, address)
+    }
+
+    @Synchronized
+    fun finalizePendingRide(now: Long = System.currentTimeMillis()): Boolean {
+        val disconnectedAt = lastDisconnectAt
+        if (disconnectedAt <= 0L || now - disconnectedAt < RIDE_DISCONNECT_GRACE_MS) return false
+        if (_connection.value.state == ConnectionState.CONNECTED) return false
+        rideLog?.finish(disconnectedAt)
+        _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
+        lastDisconnectAt = 0L
+        syncRideFlows()
+        android.util.Log.i("Session", "pending ride finalized after BLE grace period")
+        return true
     }
 
     fun onFrame(frame: DecodedFrame) {
@@ -199,17 +214,13 @@ object Session {
                 val speed = frame.field(Field.SPEED)?.toInt() ?: cur.speedKmh
                 val sw = frame.field(Field.SWITCH_STATUS)?.toInt() ?: 0
                 val odo = scaled(Field.ODOMETER, 10.0) ?: cur.odometerKm
-                if (sw == 0x40) {
-                    rideLog?.finish()
-                    syncRideFlows()
-                } else if (((speed ?: 0) > 0 || sw == 0x80) && _rides.value.none { it.inProgress }) {
-                    _telemetry.value = cur.copy(odometerAtConnectKm = odo)
-                    rideLog?.start()
-                    syncRideFlows()
+                val movingOrIgnitionOn = (speed ?: 0) > 0 || sw == 0x80
+                val hasOpenRide = _rides.value.any { it.inProgress }
+                val baselineOdo = when {
+                    sw == 0x40 -> cur.odometerAtConnectKm ?: odo
+                    movingOrIgnitionOn && !hasOpenRide -> odo
+                    else -> cur.odometerAtConnectKm ?: odo
                 }
-                val baselineOdo = _telemetry.value.odometerAtConnectKm
-                    ?: cur.odometerAtConnectKm
-                    ?: odo
                 val updated = cur.copy(
                     speedKmh = speed,
                     odometerKm = odo,
@@ -229,7 +240,19 @@ object Session {
                     lastFrameAt = now,
                 )
                 _telemetry.value = updated
+                // Start from the first fresh moving/ignition frame, not GATT connect.
+                if (movingOrIgnitionOn && !hasOpenRide) {
+                    rideLog?.start(now)
+                    syncRideFlows()
+                    _telemetry.value = updated.copy(odometerAtConnectKm = odo)
+                }
+                // Capture the final odometer before an ignition-off finish.
                 trackRideDistance()
+                if (sw == 0x40) {
+                    rideLog?.finish(now)
+                    syncRideFlows()
+                    _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
+                }
                 updated
             }
 
@@ -265,8 +288,8 @@ object Session {
         }
     }
 
-    fun onHud(update: (HudState) -> HudState) {
-        _hud.value = update(_hud.value)
+    fun onHud(transform: (HudState) -> HudState) {
+        _hud.update(transform)
     }
 
     fun onAlert(alert: ClusterAlert?) {
@@ -276,4 +299,10 @@ object Session {
     fun clearAlert(key: String) {
         if (_alert.value?.key == key) _alert.value = null
     }
+
+    fun clearActiveCall() {
+        if (_alert.value?.kind == ClusterAlert.Kind.CALL) _alert.value = null
+    }
+
+    private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
 }
