@@ -82,8 +82,7 @@ class NavigationBridge(
             return
         }
         if (controlJob?.isActive == true) return
-        var showingMetrics = false
-        var lastTwoRows = false
+        var tickCount = 0
 
         controlJob = scope.launch {
             _hud.value = _hud.value.copy(active = true, navigationDataId = navigationDataId)
@@ -98,15 +97,20 @@ class NavigationBridge(
                     if (key != lastInstructionKey) {
                         lastInstructionKey = key
                         scrollTick = 0
+                        tickCount = 0
                     }
                     val nav = step.toNavStep()
-                    val maneuver = step.displayLine(firstTextRowChars, scrollTick)
-                    val fullMetrics = step.metricsLine(secondTextRowChars, scrollTick)
+                    val maneuver = if (isJupiter) {
+                        jupiterCleanLine(step, firstTextRowChars, scrollTick)
+                    } else {
+                        step.displayLine(firstTextRowChars, scrollTick)
+                    }
+                    val metrics = step.metricsLine(secondTextRowChars, scrollTick)
 
-                    val metrics = fullMetrics
                     val twoRows = driver.buildNavTextSecondary(nav.copy(streetName = maneuver)) != null &&
                         maneuver.isNotBlank() && metrics.isNotBlank()
 
+                    // 1. Always send navigation control (0x5A 0x4E) every 1.5s as liveness heartbeat.
                     val control = nav.copy(rows = if (twoRows) 2 else 1)
                     driver.buildNavControl(control)?.let { frame ->
                         if (ble.write(frame)) {
@@ -118,25 +122,30 @@ class NavigationBridge(
                         }
                     }
 
+                    // 2. Always send Jupiter pictogram (0x5B 0x50) with 50ms BLE spacing.
                     if (isJupiter) {
+                        delay(50)
                         val picName = jupiterPictogramName(step.pictogram, step.title)
                         driver.buildPictogram(picName)?.let { ble.write(it) }
                     }
 
+                    // 3. Send text row(s) with 50ms spacing so GATT never drops frames.
+                    delay(50)
                     if (twoRows) {
                         driver.buildNavText(nav.copy(streetName = maneuver))?.let { ble.write(it) }
+                        delay(50)
                         driver.buildNavTextSecondary(
                             nav.copy(streetName = metrics),
                         )?.let { ble.write(it) }
                     } else {
-                        val line = if (showingMetrics) metrics else maneuver
+                        val showMetrics = (tickCount % 3 == 2) && metrics.isNotBlank()
+                        val line = if (showMetrics) metrics else maneuver
                         driver.buildNavText(nav.copy(streetName = line))?.let { ble.write(it) }
-                        showingMetrics = !showingMetrics
                     }
-                    lastTwoRows = twoRows
+                    tickCount++
                     scrollTick++
                 }
-                delay(if (lastTwoRows || showingMetrics) controlIntervalMs else textSwapIntervalMs)
+                delay(controlIntervalMs)
             }
         }
     }
@@ -151,6 +160,14 @@ class NavigationBridge(
 
     fun onInstruction(step: NavInstruction?) {
         _hud.value = _hud.value.copy(instruction = step)
+    }
+
+    private fun jupiterCleanLine(step: NavInstruction, maxChars: Int, scrollTick: Int): String {
+        val raw = step.street.ifBlank { step.title }.trim()
+        if (raw.length <= maxChars) return raw
+        val padded = "$raw   "
+        val offset = (scrollTick * 3) % padded.length
+        return (padded + padded).substring(offset, offset + maxChars).trimEnd()
     }
 
     private fun jupiterPictogramName(picId: Int?, title: String): String {
