@@ -234,12 +234,24 @@ class RideService : android.app.Service() {
             notify("Waiting for scooter ($reason)…")
             Session.onConnection(ConnectionState.DISCONNECTED, model, address)
             if (!alreadyUp && transport.adapter != null) {
-                scheduleReconnect(address, model)
+                scope.launch {
+                    runCatching { transport.disconnect() }
+                    if (!tearingDown) scheduleReconnect(address, model)
+                }
             }
             return false
         }
 
         linkJob = scope.launch {
+            launch {
+                delay(CONNECT_ATTEMPT_TIMEOUT_MS)
+                if (transport.state.value == ConnectionState.CONNECTING ||
+                    transport.state.value == ConnectionState.SCANNING
+                ) {
+                    Log.w(TAG, "GATT setup timed out before service/notification readiness")
+                    runCatching { transport.disconnect() }
+                }
+            }
             launch {
                 Session.hud.collect { hud ->
                     b.onInstruction(
