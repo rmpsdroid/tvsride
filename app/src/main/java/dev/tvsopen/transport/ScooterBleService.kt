@@ -99,19 +99,27 @@ class ScooterBleService(private val context: Context) {
         _state.value = ConnectionState.CONNECTING
 
         val scanner: BluetoothLeScanner? = if (!config.autoConnect) a.bluetoothLeScanner else null
+        lateinit var openGatt: () -> Unit
         val scanCallback = if (scanner != null) {
             object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult?) {
                     if (result?.device?.address.equals(address, ignoreCase = true)) {
+                        Log.i(TAG, "saved scooter advertisement found")
                         runCatching { scanner.stopScan(this) }
+                        mainHandler.post { openGatt() }
                     }
+                }
+
+                override fun onScanFailed(errorCode: Int) {
+                    Log.w(TAG, "pre-connect scan failed: $errorCode; falling back to direct GATT")
+                    mainHandler.post { openGatt() }
                 }
             }
         } else {
             null
         }
 
-        val openGatt = {
+        openGatt = {
             if (scanCallback != null && scanner != null) {
                 runCatching { scanner.stopScan(scanCallback) }
             }
@@ -240,10 +248,15 @@ class ScooterBleService(private val context: Context) {
 
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            if (g !== gatt) {
+                Log.d(TAG, "ignoring connection callback from a stale GATT client")
+                runCatching { g.close() }
+                return
+            }
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.i(TAG, "GATT connected (status=$status)")
-                    _state.value = ConnectionState.CONNECTED
+                    Log.i(TAG, "GATT connected (status=$status); negotiating MTU")
+                    _state.value = ConnectionState.CONNECTING
                     try {
                         if (g.requestMtu(Gatt.REQUESTED_MTU)) {
                             mainHandler.postDelayed(
@@ -268,6 +281,13 @@ class ScooterBleService(private val context: Context) {
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (g !== gatt) return
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.w(TAG, "service discovery failed: status=$status")
+                _state.value = ConnectionState.DISCONNECTED
+                closeGatt(g)
+                return
+            }
             val svc = resolveVerifiedService(g)
             if (svc == null) {
                 Log.w(TAG, "no verified SmartXonnect service on ${g.device.address}")
@@ -291,6 +311,7 @@ class ScooterBleService(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
+            if (g !== gatt) return
             emit(BleFrame(BleFrame.Direction.INBOUND, value, System.currentTimeMillis()))
         }
 
@@ -300,12 +321,14 @@ class ScooterBleService(private val context: Context) {
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
         ) {
+            if (g !== gatt) return
             @Suppress("DEPRECATION")
             val v = characteristic.value ?: return
             emit(BleFrame(BleFrame.Direction.INBOUND, v, System.currentTimeMillis()))
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            if (g !== gatt) return
             Log.i(TAG, "MTU=$mtu status=$status")
             startDiscovery(g)
         }
@@ -320,6 +343,12 @@ class ScooterBleService(private val context: Context) {
                 return
             }
             Log.d(TAG, "descriptor write status=$status")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.w(TAG, "notification subscription failed: status=$status")
+                _state.value = ConnectionState.DISCONNECTED
+                closeGatt(g)
+                return
+            }
             writeNextCccd(g)
         }
     }
@@ -331,7 +360,14 @@ class ScooterBleService(private val context: Context) {
     private fun writeNextCccd(g: BluetoothGatt) {
         val next = synchronized(cccdLock) {
             if (cccdQueue.isNotEmpty()) cccdQueue.removeFirst() else null
-        } ?: return
+        } ?: run {
+            if (g === gatt && writeChar != null) {
+                dropWarned = false
+                _state.value = ConnectionState.CONNECTED
+                Log.i(TAG, "GATT ready: service, write characteristic and notifications configured")
+            }
+            return
+        }
         val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
                 g.writeDescriptor(next, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
@@ -421,7 +457,11 @@ class ScooterBleService(private val context: Context) {
             if (cccd != null && canNotify) pending += cccd
             else Log.d(TAG, "no notifiable CCCD for $uuid")
         }
-        if (pending.isEmpty()) return
+        if (pending.isEmpty()) {
+            _state.value = ConnectionState.CONNECTED
+            Log.i(TAG, "GATT ready: no notification descriptors required")
+            return
+        }
         synchronized(cccdLock) {
             cccdQueue.clear()
             cccdQueue.addAll(pending)
