@@ -81,7 +81,7 @@ class RideService : android.app.Service() {
         super.onCreate()
         Log.enableFileSink(java.io.File(filesDir, "logs"))
         Session.attachRideLog(applicationContext)
-        Log.i(TAG, "service created (v${dev.tvsopen.BuildConfig.BUILD_VERSION_NAME}, sdk ${android.os.Build.VERSION.SDK_INT})")
+        Log.i(TAG, "service created (v${dev.tvsopen.BuildConfig.VERSION_NAME}, sdk ${android.os.Build.VERSION.SDK_INT})")
 
         try {
             startForeground(NOTIF_ID, buildNotification("Starting…"))
