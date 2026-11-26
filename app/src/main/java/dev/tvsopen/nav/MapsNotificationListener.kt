@@ -62,17 +62,35 @@ class MapsNotificationListener : NotificationListenerService() {
         val n = sbn ?: return
         val pkg = n.packageName
         val extras = n.notification?.extras ?: return
-        if (pkg.isBlank() || isSystemNotification(pkg)) return
+        if (pkg.isBlank()) return
 
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
         val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim().orEmpty()
         val ongoing = n.isOngoing
+        val category = n.notification?.category
+
+        // Phone/Telecom notifications must be classified before the generic
+        // system-package exclusion: Samsung's in-call UI is a system package.
+        val prefs = RidePrefs.load(this)
+        val structuralCall = category == Notification.CATEGORY_CALL ||
+            extras.containsKey("android.telecom.extra.INCOMING_CALL_EXTRAS") ||
+            extras.containsKey("android.telecom.extra.INCOMING_CALL_ADDRESS")
+        val phoneSourceCall = CallDetection.isPhoneSource(pkg) &&
+            (structuralCall || CallDetection.looksLikeCall(title, text))
+        val selectedCall = pkg in prefs.extraCallPackages && CallDetection.looksLikeCall(title, text)
+        val anyAppCall = prefs.mirrorAnyAppNotifications && CallDetection.looksLikeCall(title, text)
+        if (structuralCall || phoneSourceCall || selectedCall || anyAppCall) {
+            Log.i(TAG, "call notification observed from $pkg (category=$category, ongoing=$ongoing)")
+            if (prefs.mirrorPhoneCalls) postCall(n.key, pkg, extras, title, text)
+            return
+        }
+
+        if (isSystemNotification(pkg)) return
 
         val parsed = NavParsing.parse(title, text, bigText, subText)
         val distance = parsed.distanceMeters
-        val category = n.notification?.category
 
         val hasNavExtras = extras.containsKey("android.app.extra.MAPS_MODE") ||
             extras.containsKey("navigation.mode")
@@ -83,20 +101,6 @@ class MapsNotificationListener : NotificationListenerService() {
 
         if (looksLikeNav) {
             postNav(pkg, parsed, n.key)
-            return
-        }
-
-        val prefs = RidePrefs.load(this)
-        val structuralCall = category == Notification.CATEGORY_CALL ||
-            extras.containsKey("android.telecom.extra.INCOMING_CALL_EXTRAS") ||
-            extras.containsKey("android.telecom.extra.INCOMING_CALL_ADDRESS")
-        val selectedCall = pkg in prefs.extraCallPackages && looksLikeCall(title, text)
-        val anyAppCall = prefs.mirrorAnyAppNotifications && looksLikeCall(title, text)
-        val isCall = structuralCall || selectedCall || anyAppCall
-        if (isCall) {
-            if (prefs.mirrorPhoneCalls) {
-                postCall(n.key, pkg, extras, title, text)
-            }
             return
         }
 
@@ -118,14 +122,6 @@ class MapsNotificationListener : NotificationListenerService() {
             pkg.startsWith("com.samsung.android.incallui") ||
             pkg.startsWith("com.sec.android.") ||
             pkg == "com.google.android.gms"
-
-    private fun looksLikeCall(title: String, text: String): Boolean {
-        val s = "$title $text".lowercase()
-        return listOf(
-            "incoming call", "voice call", "video call", "is calling",
-            "calling...", "calling…", "ringing",
-        ).any { s.contains(it) }
-    }
 
     private fun postNav(pkg: String, parsed: ParsedNav, key: String) {
         activeNavKey = key
@@ -166,7 +162,7 @@ class MapsNotificationListener : NotificationListenerService() {
             ?: ""
         val name = title.ifBlank { number }.ifBlank { "Incoming call" }
         val label = appLabel(pkg).takeUnless { it == "Phone" } ?: ""
-        Log.i(TAG, "call from $pkg: '$name' '$number'")
+        Log.i(TAG, "call alert prepared from $pkg (caller details available=${number.isNotBlank()})")
         Session.onAlert(
             ClusterAlert(
                 kind = ClusterAlert.Kind.CALL,
