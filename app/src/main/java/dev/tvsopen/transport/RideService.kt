@@ -13,8 +13,6 @@ import android.location.LocationManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import dev.tvsopen.session.ParkedInfo
-import java.util.Locale
 import dev.tvsopen.log.Log
 import dev.tvsopen.nav.NavInstruction
 import dev.tvsopen.nav.NavigationBridge
@@ -29,7 +27,9 @@ import dev.tvsopen.protocol.PacketBuilder
 import dev.tvsopen.protocol.ProtocolDriver
 import dev.tvsopen.protocol.VehicleModel
 import dev.tvsopen.session.ClusterAlert
+import dev.tvsopen.session.ParkedInfo
 import dev.tvsopen.session.Session
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -164,7 +164,13 @@ class RideService : android.app.Service() {
         bridge?.stopNavigation()
 
         enterForeground()
-        val transport = ble ?: ScooterBleService(applicationContext).also { ble = it }
+        // Close and discard any previous ScooterBleService instance so Android
+        // allocates a clean BluetoothGatt handle instead of hitting stale client errors.
+        ble?.let { old ->
+            runCatching { old.disconnect() }
+        }
+        ble = null
+        val transport = ScooterBleService(applicationContext).also { ble = it }
         val driver = if (model.sharesNtorqProtocol()) {
             NtorqDriver()
         } else {
@@ -195,11 +201,14 @@ class RideService : android.app.Service() {
             val reason = when {
                 transport.adapter == null -> "no Bluetooth adapter"
                 alreadyUp -> "already connected"
-                else -> "address rejected, or a stale GATT client is still held"
+                else -> "retrying BLE link"
             }
             Log.w(TAG, "connect not started: $reason")
-            notify("Could not start connection ($reason)")
+            notify("Waiting for scooter ($reason)…")
             Session.onConnection(ConnectionState.DISCONNECTED, model, address)
+            if (!alreadyUp && transport.adapter != null) {
+                scheduleReconnect(address, model)
+            }
             return false
         }
 
@@ -510,6 +519,7 @@ class RideService : android.app.Service() {
         driver = null
         Session.onConnection(ConnectionState.DISCONNECTED, lastModel, lastAddress)
         val transport = ble
+        ble = null
         if (transport != null) {
             scope.launch(NonCancellable) {
                 runCatching { transport.disconnect() }
