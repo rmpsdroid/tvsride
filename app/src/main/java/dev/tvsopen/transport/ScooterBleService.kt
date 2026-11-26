@@ -76,6 +76,8 @@ class ScooterBleService(private val context: Context) {
 
     private var dropWarned = false
     private var lastWriteFinishedAt = 0L
+    @Volatile private var activeScanner: BluetoothLeScanner? = null
+    @Volatile private var activeScanCallback: ScanCallback? = null
 
     val bluetoothManager: BluetoothManager? =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -144,6 +146,8 @@ class ScooterBleService(private val context: Context) {
                 true
             }.getOrDefault(false)
             if (startedScan) {
+                activeScanner = scanner
+                activeScanCallback = scanCallback
                 mainHandler.postDelayed(openGatt, PRE_CONNECT_SCAN_MS)
                 return true
             }
@@ -155,6 +159,14 @@ class ScooterBleService(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     suspend fun disconnect() {
+        mainHandler.removeCallbacksAndMessages(null)
+        val scan = activeScanner
+        val callback = activeScanCallback
+        if (scan != null && callback != null) {
+            runCatching { scan.stopScan(callback) }
+            activeScanner = null
+            activeScanCallback = null
+        }
         writeLock.withLock {
             gatt?.let { closeGatt(it) }
             writeChar = null
@@ -171,6 +183,11 @@ class ScooterBleService(private val context: Context) {
         }
         writeChar = null
         mainHandler.removeCallbacksAndMessages(null)
+        activeScanner?.let { scanner ->
+            activeScanCallback?.let { callback -> runCatching { scanner.stopScan(callback) } }
+        }
+        activeScanner = null
+        activeScanCallback = null
         gatt = null
         discoveryStarted = false
         runCatching { g.close() }
