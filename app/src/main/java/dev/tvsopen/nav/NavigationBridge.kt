@@ -55,6 +55,13 @@ class NavigationBridge(
     private var scrollTick = 0
     private var lastInstructionKey: String? = null
 
+    private suspend fun sendWithRetry(bytes: ByteArray?): Boolean {
+        val frame = bytes ?: return false
+        if (ble.write(frame)) return true
+        delay(80)
+        return ble.write(frame)
+    }
+
     fun startKeepalive(dash: () -> DashState) {
         if (pingJob?.isActive == true) return
         pingJob = scope.launch {
@@ -110,37 +117,34 @@ class NavigationBridge(
                     val twoRows = driver.buildNavTextSecondary(nav.copy(streetName = maneuver)) != null &&
                         maneuver.isNotBlank() && metrics.isNotBlank()
 
-                    // 1. Always send navigation control (0x5A 0x4E) every 1.5s as liveness heartbeat.
+                    // 1. Send navigation control (0x5A 0x4E) every 1.5s as liveness heartbeat.
                     val control = nav.copy(rows = if (twoRows) 2 else 1)
-                    driver.buildNavControl(control)?.let { frame ->
-                        if (ble.write(frame)) {
-                            _hud.value = _hud.value.copy(
-                                framesSent = _hud.value.framesSent + 1, lastError = null,
-                            )
-                        } else {
-                            _hud.value = _hud.value.copy(lastError = "nav frame not written")
-                        }
+                    if (sendWithRetry(driver.buildNavControl(control))) {
+                        _hud.value = _hud.value.copy(
+                            framesSent = _hud.value.framesSent + 1,
+                            lastError = null,
+                        )
+                    } else {
+                        _hud.value = _hud.value.copy(lastError = "nav frame not written")
                     }
 
-                    // 2. Always send Jupiter pictogram (0x5B 0x50) with 50ms BLE spacing.
+                    // 2. Send Jupiter pictogram (0x5B 0x50) with spacing + retry.
                     if (isJupiter) {
-                        delay(50)
+                        delay(60)
                         val picName = jupiterPictogramName(step.pictogram, step.title)
-                        driver.buildPictogram(picName)?.let { ble.write(it) }
+                        sendWithRetry(driver.buildPictogram(picName))
                     }
 
-                    // 3. Send text row(s) with 50ms spacing so GATT never drops frames.
-                    delay(50)
+                    // 3. Send text row(s) with spacing + retry so GATT never drops frames.
+                    delay(60)
                     if (twoRows) {
-                        driver.buildNavText(nav.copy(streetName = maneuver))?.let { ble.write(it) }
-                        delay(50)
-                        driver.buildNavTextSecondary(
-                            nav.copy(streetName = metrics),
-                        )?.let { ble.write(it) }
+                        sendWithRetry(driver.buildNavText(nav.copy(streetName = maneuver)))
+                        delay(60)
+                        sendWithRetry(driver.buildNavTextSecondary(nav.copy(streetName = metrics)))
                     } else {
                         val showMetrics = (tickCount % 3 == 2) && metrics.isNotBlank()
                         val line = if (showMetrics) metrics else maneuver
-                        driver.buildNavText(nav.copy(streetName = line))?.let { ble.write(it) }
+                        sendWithRetry(driver.buildNavText(nav.copy(streetName = line)))
                     }
                     tickCount++
                     scrollTick++
@@ -163,7 +167,12 @@ class NavigationBridge(
     }
 
     private fun jupiterCleanLine(step: NavInstruction, maxChars: Int, scrollTick: Int): String {
-        val raw = step.street.ifBlank { step.title }.trim()
+        val street = step.street.trim()
+        val raw = when {
+            street.isNotEmpty() && !street.startsWith("Arrive", ignoreCase = true) -> street
+            step.title.isNotBlank() -> step.title.trim()
+            else -> street
+        }
         if (raw.length <= maxChars) return raw
         val padded = "$raw   "
         val offset = (scrollTick * 3) % padded.length
