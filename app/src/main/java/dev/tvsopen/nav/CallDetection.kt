@@ -19,7 +19,7 @@ internal object CallDetection {
 
     fun looksLikeCall(title: String, text: String): Boolean {
         val content = "$title $text".lowercase()
-        return CALL_PHRASES.any(content::contains)
+        return CALL_PHRASES.any { phrase -> content.contains(phrase) }
     }
 
     private val CALL_PHRASES = listOf(
