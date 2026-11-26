@@ -339,7 +339,10 @@ class RideService : android.app.Service() {
 
             if (drv.capabilities.calibration) {
                 prefs.followMeTimerSec?.let { sec ->
-                    val frame = ClusterFrames.calibration(
+                    val frame = drv.buildCalibration(
+                        ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
+                        sec,
+                    ) ?: ClusterFrames.calibration(
                         ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
                         sec,
                     )
@@ -348,7 +351,10 @@ class RideService : android.app.Service() {
                 }
 
                 prefs.idleStopTimerSec?.let { sec ->
-                    val frame = ClusterFrames.calibration(
+                    val frame = drv.buildCalibration(
+                        ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
+                        sec,
+                    ) ?: ClusterFrames.calibration(
                         ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
                         sec,
                     )
@@ -385,8 +391,10 @@ class RideService : android.app.Service() {
 
     private fun sendCalibrationIfConnected(command: Int, value: Int) {
         val transport = ble ?: return
+        val drv = driver ?: return
         if (transport.state.value != ConnectionState.CONNECTED) return
-        val frame = ClusterFrames.calibration(command, value)
+        val frame = drv.buildCalibration(command, value)
+            ?: ClusterFrames.calibration(command, value)
         scope.launch {
             if (transport.write(frame)) Log.i(TAG, "calibration cmd=$command val=$value sent")
         }
