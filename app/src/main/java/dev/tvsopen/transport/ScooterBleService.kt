@@ -1,9 +1,3 @@
-// BLE transport.
-//
-// Model-agnostic: it knows about GATT and framing, not about what any
-// particular cluster's frames mean. Per-model meaning lives behind
-// ProtocolDriver.
-
 package dev.tvsopen.transport
 
 import android.annotation.SuppressLint
@@ -15,6 +9,9 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.os.Build
 import android.os.Handler
@@ -24,24 +21,20 @@ import android.os.SystemClock
 import dev.tvsopen.log.Log
 import dev.tvsopen.protocol.Gatt
 import dev.tvsopen.protocol.GattConfig
+import java.util.UUID
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.suspendCancellableCoroutine
-import java.util.UUID
 
 enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED, RECONNECTING }
 
-/**
- * Human-readable label. The enum's own `name` renders as "DISCONNECTED", which
- * is shouting in a status pill.
- */
 val ConnectionState.label: String
     get() = when (this) {
         ConnectionState.DISCONNECTED -> "Disconnected"
@@ -60,22 +53,6 @@ data class BleFrame(val direction: Direction, val bytes: ByteArray, val atMillis
     override fun hashCode() = ((direction.ordinal * 31 + bytes.contentHashCode()) * 31 + atMillis.hashCode())
 }
 
-/**
- * One GATT link to one cluster.
- *
- * ## Why the write mutex
- *
- * Android's BLE stack is not thread-safe. With a navigation broadcast, a
- * keepalive ping and button events all in flight, concurrent
- * `writeCharacteristic` calls produce status-133 disconnects. Every write here
- * goes through a [Mutex], serialising them into a FIFO queue.
- *
- * ## Why write-without-response
- *
- * Upstream sets `getCharacteristicsWriteType() == 2`
- * (`WRITE_TYPE_NO_RESPONSE`) and requests a 512-byte MTU on every petrol
- * model, so a full frame fits in one packet and no flow control is needed.
- */
 class ScooterBleService(private val context: Context) {
 
     private val _state = MutableStateFlow(ConnectionState.DISCONNECTED)
@@ -88,29 +65,17 @@ class ScooterBleService(private val context: Context) {
     val lastFrameAt: StateFlow<Long> = _lastFrameAt.asStateFlow()
 
     private val writeLock = Mutex()
-    // Written on the binder thread by the GATT callback and read on a coroutine
-    // by connect/write, so the visibility guarantee is not optional: without it
-    // a reconnect can read a stale non-null and refuse, which is exactly the
-    // failure this class had.
     @Volatile
     private var gatt: BluetoothGatt? = null
     private var writeChar: BluetoothGattCharacteristic? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** Set once per connection, so the MTU callback and the fallback timer
-     * cannot both start discovery. */
     @Volatile
     private var discoveryStarted = false
 
-    /**
-     * Whether the current link outage has already been reported.
-     *
-     * Guarded by [writeLock] rather than volatile: every read and write happens
-     * inside `write`, so the lock is already held and a separate field would
-     * only invite a second synchronisation scheme to drift out of step.
-     */
     private var dropWarned = false
+    private var lastWriteFinishedAt = 0L
 
     val bluetoothManager: BluetoothManager? =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -120,8 +85,6 @@ class ScooterBleService(private val context: Context) {
 
     fun isSupported(): Boolean =
         context.packageManager.hasSystemFeature("android.hardware.bluetooth_le")
-
-    // ---- lifecycle ----
 
     @SuppressLint("MissingPermission")
     fun connect(address: String, config: GattConfig = GattConfig.DEFAULT): Boolean {
@@ -135,19 +98,55 @@ class ScooterBleService(private val context: Context) {
         }
         _state.value = ConnectionState.CONNECTING
 
-        gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            device.connectGatt(context, config.autoConnect, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        val scanner: BluetoothLeScanner? = if (!config.autoConnect) a.bluetoothLeScanner else null
+        val scanCallback = if (scanner != null) {
+            object : ScanCallback() {
+                override fun onScanResult(callbackType: Int, result: ScanResult?) {
+                    if (result?.device?.address.equals(address, ignoreCase = true)) {
+                        runCatching { scanner.stopScan(this) }
+                    }
+                }
+            }
         } else {
-            device.connectGatt(context, config.autoConnect, gattCallback)
+            null
         }
-        return true
+
+        val openGatt = {
+            if (scanCallback != null && scanner != null) {
+                runCatching { scanner.stopScan(scanCallback) }
+            }
+            if (gatt == null && _state.value == ConnectionState.CONNECTING) {
+                gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    device.connectGatt(
+                        context,
+                        config.autoConnect,
+                        gattCallback,
+                        BluetoothDevice.TRANSPORT_LE,
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    device.connectGatt(context, config.autoConnect, gattCallback)
+                }
+            }
+        }
+
+        if (scanner != null && scanCallback != null && a.isEnabled) {
+            val startedScan = runCatching {
+                scanner.startScan(null, android.bluetooth.le.ScanSettings.Builder().build(), scanCallback)
+                true
+            }.getOrDefault(false)
+            if (startedScan) {
+                mainHandler.postDelayed(openGatt, PRE_CONNECT_SCAN_MS)
+                return true
+            }
+        }
+
+        openGatt()
+        return gatt != null
     }
 
     @SuppressLint("MissingPermission")
     suspend fun disconnect() {
-        // Suspend rather than plain fun: withLock is a suspend function, and a
-        // non-suspend caller could not use it. Waiting here also guarantees no
-        // write is in flight when the GATT client is closed.
         writeLock.withLock {
             gatt?.let { closeGatt(it) }
             writeChar = null
@@ -155,26 +154,9 @@ class ScooterBleService(private val context: Context) {
         _state.value = ConnectionState.DISCONNECTED
     }
 
-    /**
-     * Close a GATT client and drop our reference to it.
-     *
-     * `close()` is what releases the client registration; without it the client
-     * leaks and stays in `gatt`. That matters because `connect()` treats a
-     * non-null `gatt` as "already connected" and refuses — so a single dropped
-     * link left the app unable to reconnect for the life of the process, and
-     * the only recovery was force-stopping it. Observed on hardware: the cluster
-     * dropped with status 8 after ~2 minutes, and every later Connect was
-     * refused with "link already active".
-     *
-     * Called from the binder callback as well as from [disconnect], so the
-     * identity check matters — a stale callback must not clear a newer client.
-     */
     @SuppressLint("MissingPermission")
     private fun closeGatt(g: BluetoothGatt) {
         if (gatt !== g) {
-            // A late callback from a previous client must not clear the new
-            // link's write characteristic or cancel its discovery fallback —
-            // that leaves a link that says CONNECTED but can never work.
             runCatching { g.close() }
                 .onFailure { Log.w(TAG, "gatt close: ${it.message}") }
             return
@@ -187,17 +169,7 @@ class ScooterBleService(private val context: Context) {
             .onFailure { Log.w(TAG, "gatt close: ${it.message}") }
     }
 
-    /**
-     * Enqueue a write. Never throws; BLE failures are reported through
-     * [ConnectionState] and the log, because a dropped frame is recoverable
-     * and an exception in a caller coroutine is not.
-     */
     suspend fun write(bytes: ByteArray): Boolean = writeLock.withLock {
-        // CONNECTED is published at GATT connect, but writeChar is only set
-        // after MTU + service discovery. Frames sent from the CONNECTED branch
-        // — the rider-name greeting, the first keepalive, the first nav step —
-        // were dropped as "no write characteristic" and never retried. Wait
-        // briefly for setup; other writers queue on this lock anyway.
         if (_state.value == ConnectionState.CONNECTED && writeChar == null) {
             val deadline = SystemClock.elapsedRealtime() + WRITE_READY_WAIT_MS
             while (writeChar == null && gatt != null &&
@@ -209,17 +181,6 @@ class ScooterBleService(private val context: Context) {
         val g = gatt
         val ch = writeChar
         if (g == null || ch == null || _state.value != ConnectionState.CONNECTED) {
-            // Log the *first* drop of an outage, not every attempt.
-            //
-            // The keepalive pings every 2 s for the whole session, so with the
-            // link down this line fired 30 times a minute, forever. It drowned
-            // the log: a 13-hour capture was mostly one repeated message, and the
-            // frames that actually explain a fault became the hard part to find.
-            // The per-frame dedup in `Log.frame` cannot help here because these
-            // writes never reach it — they are dropped before any frame is built.
-            //
-            // Reset on the first successful write, so each outage is reported
-            // exactly once and a reconnect is not silent.
             if (!dropWarned) {
                 dropWarned = true
                 val why = when {
@@ -231,15 +192,14 @@ class ScooterBleService(private val context: Context) {
             }
             return@withLock false
         }
-        // Explicit <Boolean>: the lambda's last expression is a conditional on
-        // `cont.resume(...)` which returns Unit, so inference would pick the
-        // wrong T and `ok` would be typed as the continuation result itself.
+
+        val sinceLast = SystemClock.elapsedRealtime() - lastWriteFinishedAt
+        if (sinceLast in 0 until INTER_WRITE_DELAY_MS) {
+            delay(INTER_WRITE_DELAY_MS - sinceLast)
+        }
+
         val ok = suspendCancellableCoroutine<Boolean> { cont ->
             val result = try {
-                // The 3-argument overload exists only on API 33+. Calling it on
-                // an older phone throws NoSuchMethodError and takes the writer
-                // down, so the legacy path sets the value and type on the
-                // characteristic first — that is the only form API 26-32 has.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     g.writeCharacteristic(
                         ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE,
@@ -256,14 +216,10 @@ class ScooterBleService(private val context: Context) {
                 Log.e(TAG, "write refused: ${e.message}")
                 false
             }
-            // resumeWith, not resume: the `resume` extension on Continuation is
-            // ambiguous against CancellableContinuation's member here, and the
-            // inferred type leaks into `ok`.
             cont.resumeWith(Result.success(result))
         }
+        lastWriteFinishedAt = SystemClock.elapsedRealtime()
         if (ok) {
-            // Re-arm the outage warning: the link came back, so the next drop is
-            // news again rather than a continuation of the one already reported.
             dropWarned = false
             emit(BleFrame(BleFrame.Direction.OUTBOUND, bytes, System.currentTimeMillis()))
         }
@@ -273,8 +229,6 @@ class ScooterBleService(private val context: Context) {
     private fun emit(frame: BleFrame) {
         _lastFrameAt.value = frame.atMillis
         _frames.tryEmit(frame)
-        // Bytes go in, hex comes out inside Log.frame, which also skips the
-        // formatting cost entirely when capture is disabled.
         Log.frame(
             if (frame.direction == BleFrame.Direction.INBOUND) "IN " else "OUT",
             frame.bytes,
@@ -291,12 +245,6 @@ class ScooterBleService(private val context: Context) {
                     Log.i(TAG, "GATT connected (status=$status)")
                     _state.value = ConnectionState.CONNECTED
                     try {
-                        // Discovery must NOT be issued while the MTU exchange is
-                        // in flight: the stack answers it with BUSY and
-                        // `onServicesDiscovered` is then never called, so the
-                        // link sits "connected" with no write characteristic
-                        // forever. This was invisible on the Ntorq and showed up
-                        // on the first peripheral that took the MTU seriously.
                         if (g.requestMtu(Gatt.REQUESTED_MTU)) {
                             mainHandler.postDelayed(
                                 { startDiscovery(g) },
@@ -313,10 +261,6 @@ class ScooterBleService(private val context: Context) {
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.w(TAG, "GATT disconnected (status=$status)")
                     _state.value = ConnectionState.DISCONNECTED
-                    // Must release the client here, not just clear the
-                    // characteristic: `connect()` bails out while `gatt` is
-                    // non-null, so leaving a dead client in place made every
-                    // subsequent reconnect a silent no-op. See [closeGatt].
                     closeGatt(g)
                 }
             }
@@ -331,8 +275,6 @@ class ScooterBleService(private val context: Context) {
             }
             val ch = svc.getCharacteristic(UUID.fromString(Gatt.WRITE))
             if (ch == null) {
-                // Unreachable after resolveVerifiedService, but the compiler
-                // needs the check and an explicit refusal beats a crash.
                 Log.w(TAG, "write characteristic ${Gatt.WRITE} missing")
                 return
             }
@@ -341,10 +283,6 @@ class ScooterBleService(private val context: Context) {
                 TAG,
                 "service ready (${svc.uuid}), write char props=0x${ch.properties.toString(16)}",
             )
-            // Listen before the CCCD write: the cluster can emit the 0x9A/0xF2
-            // challenge the instant the descriptor is written, and anything
-            // subscribed after that loses it. setCharacteristicNotification
-            // only arms the local callback; the descriptor write follows.
             enableNotifications(g, svc)
         }
 
@@ -369,9 +307,6 @@ class ScooterBleService(private val context: Context) {
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
             Log.i(TAG, "MTU=$mtu status=$status")
-            // The MTU exchange is done, so discovery is safe now. Calling this
-            // here rather than from onConnectionStateChange is what makes
-            // onServicesDiscovered actually fire.
             startDiscovery(g)
         }
 
@@ -385,14 +320,10 @@ class ScooterBleService(private val context: Context) {
                 return
             }
             Log.d(TAG, "descriptor write status=$status")
-            // One CCCD write at a time: firing the next while one is pending
-            // makes the stack refuse it, so the queue advances here.
             writeNextCccd(g)
         }
     }
 
-    /** Pending CCCD writes, drained one per [onDescriptorWrite]. Guarded because
-     * the callback arrives on a binder thread, not the caller's. */
     private val cccdQueue = ArrayDeque<BluetoothGattDescriptor>()
     private val cccdLock = Any()
 
@@ -401,10 +332,6 @@ class ScooterBleService(private val context: Context) {
         val next = synchronized(cccdLock) {
             if (cccdQueue.isNotEmpty()) cccdQueue.removeFirst() else null
         } ?: return
-        // The two writeDescriptor overloads differ in return type: the API-33 one
-        // returns an Int status code, the deprecated one a Boolean. An
-        // if/else mixing them infers `Comparable & Serializable`, so
-        // normalise both to Boolean here.
         val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
                 g.writeDescriptor(next, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
@@ -442,14 +369,6 @@ class ScooterBleService(private val context: Context) {
         return ok
     }
 
-    /**
-     * Start service discovery exactly once per connection.
-     *
-     * Two callers race here on purpose: [onMtuChanged] in the normal case, and
-     * the fallback timer posted at connect for stacks that never report an MTU.
-     * A stale `g` from a previous connection is ignored so a reconnect can
-     * never inherit its predecessor's attempt.
-     */
     @SuppressLint("MissingPermission")
     private fun startDiscovery(g: BluetoothGatt) {
         if (g !== gatt || discoveryStarted) return
@@ -458,27 +377,6 @@ class ScooterBleService(private val context: Context) {
         if (!discoverServices(g)) discoveryStarted = false
     }
 
-    /**
-     * Resolve the service that actually carries this protocol.
-     *
-     * The Scoot spec calls this the "verified-open gate", and the ordering
-     * matters:
-     *
-     *  1. The exact service UUID with both characteristics is the primary path.
-     *  2. If the service UUID is present but a characteristic is missing, that
-     *     is a **hard failure** — not a fallback. A cluster advertising the
-     *     service without the write characteristic cannot be driven, and
-     *     silently picking another service would drive the wrong one.
-     *  3. Only when the service UUID is absent entirely do we fall back to any
-     *     GATT service exposing both characteristic UUIDs. The characteristics
-     *     are the true protocol fingerprint: a variant cluster that moves the
-     *     service UUID still resolves.
-     *
-     * Observed on the owner's Ntorq: the cluster advertises **no service UUID**
-     * at all in its advertising payload, which is why scanning must be
-     * name-based. Discovery is a different question and this is where it is
-     * answered.
-     */
     @SuppressLint("MissingPermission")
     private fun resolveVerifiedService(g: BluetoothGatt): android.bluetooth.BluetoothGattService? {
         val serviceUuid = UUID.fromString(Gatt.SERVICE)
@@ -519,8 +417,6 @@ class ScooterBleService(private val context: Context) {
             val ch = svc.getCharacteristic(UUID.fromString(uuid)) ?: continue
             g.setCharacteristicNotification(ch, true)
             val cccd = ch.getDescriptor(CCCD)
-            // Parentheses are required: `and` is an infix *function*, not a bitwise
-            // operator, so `props and FLAG != 0` does not parse as intended.
             val canNotify = (ch.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
             if (cccd != null && canNotify) pending += cccd
             else Log.d(TAG, "no notifiable CCCD for $uuid")
@@ -535,40 +431,19 @@ class ScooterBleService(private val context: Context) {
 
     companion object {
         private const val TAG = "ScooterBle"
-
-        /**
-         * How long to wait for `onMtuChanged` before starting discovery anyway.
-         *
-         * Long enough for a slow peripheral to answer the MTU exchange, short
-         * enough that a stack which never reports it does not stall the link.
-         */
         private const val DISCOVERY_FALLBACK_MS = 2500L
-
-        /** Max wait for the write characteristic after a GATT connect. */
         private const val WRITE_READY_WAIT_MS = 2_000L
+        private const val INTER_WRITE_DELAY_MS = 120L
+        private const val PRE_CONNECT_SCAN_MS = 1200L
 
         val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-        /**
-         * Cheap structural check for an inbound frame, model-agnostic.
-         *
-         * **Deliberately does not verify a checksum.** Decompiling the official
-         * builders showed that the outbound mobile-data and navigation frames
-         * carry none, and several inbound layouts (`ApacheBasicData`,
-         * `NtorqWifiPasswordFrameData`) declare `CHECKSUM` at index 18 or 19
-         * while others declare none. A checksum check here would reject valid
-         * frames.
-         *
-         * Model-specific validation belongs in each [dev.tvsopen.protocol.ProtocolDriver],
-         * which knows its own layout.
-         */
         fun looksValid(bytes: ByteArray): Boolean {
             if (bytes.size < 3) return false
             val start = bytes[0].toInt() and 0xFF
             return start == 0x5A || start == 0x5B || start == 0x9A || start == 0x9B
         }
 
-        /** Wrap a UUID string for scanning filters. */
         fun parcelUuid(uuid: String): ParcelUuid = ParcelUuid(UUID.fromString(uuid))
     }
 }
