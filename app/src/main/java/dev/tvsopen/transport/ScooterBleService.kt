@@ -291,11 +291,15 @@ class ScooterBleService(private val context: Context) {
             val svc = resolveVerifiedService(g)
             if (svc == null) {
                 Log.w(TAG, "no verified SmartXonnect service on ${g.device.address}")
+                _state.value = ConnectionState.DISCONNECTED
+                closeGatt(g)
                 return
             }
             val ch = svc.getCharacteristic(UUID.fromString(Gatt.WRITE))
             if (ch == null) {
                 Log.w(TAG, "write characteristic ${Gatt.WRITE} missing")
+                _state.value = ConnectionState.DISCONNECTED
+                closeGatt(g)
                 return
             }
             writeChar = ch
@@ -410,7 +414,11 @@ class ScooterBleService(private val context: Context) {
         if (g !== gatt || discoveryStarted) return
         discoveryStarted = true
         mainHandler.removeCallbacksAndMessages(null)
-        if (!discoverServices(g)) discoveryStarted = false
+        if (!discoverServices(g)) {
+            discoveryStarted = false
+            _state.value = ConnectionState.DISCONNECTED
+            closeGatt(g)
+        }
     }
 
     @SuppressLint("MissingPermission")
