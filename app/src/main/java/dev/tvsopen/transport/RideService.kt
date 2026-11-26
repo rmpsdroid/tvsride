@@ -29,6 +29,9 @@ import dev.tvsopen.protocol.VehicleModel
 import dev.tvsopen.session.ClusterAlert
 import dev.tvsopen.session.ParkedInfo
 import dev.tvsopen.session.Session
+import android.telephony.TelephonyManager
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +62,8 @@ class RideService : android.app.Service() {
     private var tearingDown = false
     private var linkWakeLock: android.os.PowerManager.WakeLock? = null
     private var hadLiveLink = false
+    private var telephonyCallMonitor: TelephonyCallMonitor? = null
+    private var disconnectFinalizeJob: Job? = null
 
     private fun holdWakeLock() {
         if (linkWakeLock?.isHeld == true) return
@@ -81,6 +86,25 @@ class RideService : android.app.Service() {
         super.onCreate()
         Log.enableFileSink(java.io.File(filesDir, "logs"))
         Session.attachRideLog(applicationContext)
+        telephonyCallMonitor = TelephonyCallMonitor(applicationContext) { callState ->
+            when (callState) {
+                TelephonyManager.CALL_STATE_RINGING -> {
+                    if (Session.alert.value?.kind != ClusterAlert.Kind.CALL) {
+                        Session.onAlert(
+                            ClusterAlert(
+                                kind = ClusterAlert.Kind.CALL,
+                                title = "Incoming call",
+                                key = "telephony-sim-call",
+                            ),
+                        )
+                    }
+                }
+                TelephonyManager.CALL_STATE_IDLE -> Session.clearActiveCall()
+                // OFFHOOK means the call was answered or outgoing. Keep the
+                // alert until IDLE so the cluster is not cleared mid-call.
+                else -> Unit
+            }
+        }.also { it.start() }
         Log.i(TAG, "service created (v${dev.tvsopen.BuildConfig.VERSION_NAME}, sdk ${android.os.Build.VERSION.SDK_INT})")
 
         try {
@@ -157,9 +181,11 @@ class RideService : android.app.Service() {
     fun connect(address: String, model: VehicleModel): Boolean {
         linkJob?.cancel()
         linkJob = null
-        reconnectJob?.cancel()
-        reconnectJob = null
-        reconnectAttempt = 0
+        if (!fromReconnect) {
+            reconnectJob?.cancel()
+            reconnectJob = null
+            reconnectAttempt = 0
+        }
         tearingDown = false
         bridge?.stopKeepalive()
         bridge?.stopNavigation()
@@ -250,6 +276,10 @@ class RideService : android.app.Service() {
                     Log.d(TAG, "state -> $st")
                     when (st) {
                         ConnectionState.CONNECTED -> {
+                            disconnectFinalizeJob?.cancel()
+                            disconnectFinalizeJob = null
+                            reconnectJob?.cancel()
+                            reconnectJob = null
                             reconnectAttempt = 0
                             hadLiveLink = true
                             notify("Connected to ${model.displayName}")
@@ -270,8 +300,14 @@ class RideService : android.app.Service() {
                         }
                         ConnectionState.DISCONNECTED -> {
                             releaseWakeLock()
-                            recordParkedIfPossible()
                             notify("Disconnected")
+                            disconnectFinalizeJob?.cancel()
+                            disconnectFinalizeJob = scope.launch {
+                                delay(RIDE_DISCONNECT_GRACE_MS)
+                                if (Session.finalizePendingRide()) {
+                                    recordParkedIfPossible()
+                                }
+                            }
                             scheduleReconnect(address, model)
                         }
                         else -> Unit
@@ -494,23 +530,52 @@ class RideService : android.app.Service() {
 
     private fun scheduleReconnect(address: String, model: VehicleModel) {
         if (tearingDown) return
+        val currentState = ble?.state?.value
+        if (currentState == ConnectionState.CONNECTED ||
+            currentState == ConnectionState.CONNECTING ||
+            currentState == ConnectionState.SCANNING
+        ) return
         if (reconnectJob?.isActive == true) return
+
         val attempt = reconnectAttempt
-        reconnectAttempt++
         val wait = when {
             attempt < RECONNECT_DELAYS_MS.size -> RECONNECT_DELAYS_MS[attempt]
             attempt < 34 -> 60_000L
             else -> 180_000L
         }
-        Log.i(TAG, "unexpected drop; reconnect #${attempt + 1} in ${wait}ms")
+        reconnectAttempt = attempt + 1
+        Log.i(TAG, "reconnect #${attempt + 1} scheduled in ${wait}ms")
         reconnectJob = scope.launch {
             delay(wait)
-            if (ble?.state?.value == ConnectionState.CONNECTED) return@launch
-            val attemptBefore = reconnectAttempt
-            connect(address, model)
-            if (ble?.state?.value != ConnectionState.CONNECTED) {
-                reconnectAttempt = attemptBefore
+            if (tearingDown) return@launch
+            val active = ble?.state?.value
+            if (active == ConnectionState.CONNECTED ||
+                active == ConnectionState.CONNECTING ||
+                active == ConnectionState.SCANNING
+            ) return@launch
+
+            val started = connect(address, model, fromReconnect = true)
+            if (!started) {
+                Log.w(TAG, "reconnect attempt #${attempt + 1} could not start")
+                reconnectJob = null
                 if (!tearingDown) scheduleReconnect(address, model)
+                return@launch
+            }
+
+            val transport = ble
+            val terminal = if (transport == null) null else withTimeoutOrNull(CONNECT_ATTEMPT_TIMEOUT_MS) {
+                transport.state.first {
+                    it == ConnectionState.CONNECTED || it == ConnectionState.DISCONNECTED
+                }
+            }
+            if (terminal != ConnectionState.CONNECTED) {
+                Log.w(TAG, "reconnect attempt #${attempt + 1} timed out or disconnected")
+                runCatching { transport?.disconnect() }
+                reconnectJob = null
+                if (!tearingDown) scheduleReconnect(address, model)
+            } else {
+                Log.i(TAG, "reconnect attempt #${attempt + 1} connected")
+                reconnectJob = null
             }
         }
     }
@@ -519,6 +584,10 @@ class RideService : android.app.Service() {
         tearingDown = true
         reconnectJob?.cancel()
         reconnectJob = null
+        disconnectFinalizeJob?.cancel()
+        disconnectFinalizeJob = null
+        telephonyCallMonitor?.stop()
+        telephonyCallMonitor = null
         recordParkedIfPossible()
         linkJob?.cancel()
         linkJob = null
@@ -580,6 +649,8 @@ class RideService : android.app.Service() {
 
     companion object {
         private const val TAG = "RideService"
+        private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
+        private const val CONNECT_ATTEMPT_TIMEOUT_MS = 20_000L
         const val CHANNEL = "ride"
         const val NOTIF_ID = 1
         const val ACTION_CONNECT = "dev.tvsopen.CONNECT"
