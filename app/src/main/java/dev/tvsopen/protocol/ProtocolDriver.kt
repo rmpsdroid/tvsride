@@ -103,6 +103,9 @@ interface ProtocolDriver {
     /** `0x5A 0xF1` cluster brightness, level 1..5. */
     fun buildBrightness(level: Int): ByteArray? = null
 
+    /** Calibration write (`0x5A 0x37` or model-specific calibration frame). */
+    fun buildCalibration(command: Int, value: Int): ByteArray? = null
+
     /** `0x22` first-connection user id. Never sent automatically. */
     fun buildUserId(id: Long): ByteArray? = null
 
