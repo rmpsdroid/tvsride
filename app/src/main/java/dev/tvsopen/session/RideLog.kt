@@ -81,7 +81,7 @@ class RideLog(context: Context) {
         val open = current.firstOrNull() ?: return
         if (!open.inProgress || distanceKm < 0) return
         if ((distanceKm * 10).toLong() == (open.distanceKm * 10).toLong()) return
-        _rides.value = listOf(open.copy(distanceKm = distanceKm)) + current.drop(1)
+        persist(listOf(open.copy(distanceKm = distanceKm)) + current.drop(1))
     }
 
     /** Closes the open ride and folds it into the running totals, dropping < 0.1 km ghost reconnects. */
