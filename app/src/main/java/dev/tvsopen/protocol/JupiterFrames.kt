@@ -267,6 +267,22 @@ class JupiterDriver(
     override fun buildBrightness(level: Int): ByteArray? =
         ClusterFrames.vehicleControl(level)
 
+    override fun buildCalibration(command: Int, value: Int): ByteArray? {
+        val calId = when (command) {
+            ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER -> Calibration.ID_FOLLOW_ME_HEAD_LAMP
+            ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER -> Calibration.ID_IDLE_START_STOP
+            ClusterFrames.CalibrationCommand.TSL_AUTO_CANCEL_TIMER -> Calibration.ID_TSL_ON_OFF
+            else -> command
+        }
+        val payload = byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+            ((value shr 16) and 0xFF).toByte(),
+            ((value shr 24) and 0xFF).toByte(),
+        )
+        return PacketBuilder.calibration(Calibration.WRITE, calId, payload)
+    }    
+
     override fun buildUserId(id: Long): ByteArray? = ClusterFrames.userId(id)
 
     override fun buildSms(text: String): ByteArray? = ClusterFrames.sms(text)
