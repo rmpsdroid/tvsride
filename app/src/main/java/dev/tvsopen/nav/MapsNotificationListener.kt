@@ -114,7 +114,7 @@ class MapsNotificationListener : NotificationListenerService() {
         val isMessage = hasMessageStyle || category == Notification.CATEGORY_MESSAGE ||
             selectedMessage || anyAppMessage
         if (isMessage && prefs.mirrorMessages) {
-            postMessage(n.key, pkg, extras, title, bigText.ifBlank { text })
+            postMessage(n.key, n.postTime, pkg, extras, title, bigText.ifBlank { text })
         }
     }
 
@@ -227,6 +227,7 @@ class MapsNotificationListener : NotificationListenerService() {
 
     private fun postMessage(
         key: String,
+        postedAtMs: Long,
         pkg: String,
         extras: Bundle,
         title: String,
@@ -260,6 +261,7 @@ class MapsNotificationListener : NotificationListenerService() {
                 key = key,
                 messageSender = clusterSender,
                 messageBody = info.body.takeIf { withText },
+                messagePostedAtMs = postedAtMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
             ),
         )
     }
