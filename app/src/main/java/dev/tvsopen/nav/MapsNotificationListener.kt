@@ -1,8 +1,11 @@
 package dev.tvsopen.nav
 
 import android.app.Notification
+import android.app.Person
 import android.content.ComponentName
 import android.os.Bundle
+import android.os.Parcelable
+import android.telephony.TelephonyManager
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import dev.tvsopen.log.Log
@@ -156,13 +159,37 @@ class MapsNotificationListener : NotificationListenerService() {
     }
 
     private fun postCall(key: String, pkg: String, extras: Bundle, title: String, text: String) {
+        cancelPendingMessageClear()
+
+        val incomingExtras = extras.getBundle("android.telecom.extra.INCOMING_CALL_EXTRAS")
         val address = extras.get("android.telecom.extra.INCOMING_CALL_ADDRESS")?.toString()
+        val additionalNumbers = listOfNotNull(
+            extras.get("android.telecom.extra.CALLER_NUMBER")?.toString(),
+            extras.get("android.phone.extra.CALLER_NUMBER")?.toString(),
+            incomingExtras?.get("android.telecom.extra.INCOMING_CALL_ADDRESS")?.toString(),
+        )
+        val additionalNames = listOfNotNull(
+            callPersonName(extras),
+            extras.getCharSequence("android.telecom.extra.CALLER_NAME")?.toString(),
+            extras.getCharSequence("android.telecom.extra.CALLER_DISPLAY_NAME")?.toString(),
+            extras.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString(),
+            extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString(),
+            incomingExtras?.getCharSequence("android.telecom.extra.CALLER_NAME")?.toString(),
+        )
         val caller = CallDetection.extractCallerDetails(
             address = address,
             title = title,
             text = text,
             sourceLabel = appLabel(pkg),
+            additionalNumbers = additionalNumbers,
+            additionalNames = additionalNames,
         )
+        val telephony = getSystemService(TelephonyManager::class.java)
+        val region = telephony?.simCountryIso?.takeIf { it.isNotBlank() }
+            ?: telephony?.networkCountryIso?.takeIf { it.isNotBlank() }
+        val numberParts = CallerNumberFormatter.split(caller.number, region)
+        val nationalNumber = numberParts.nationalNumber.takeIf { it.isNotBlank() }
         val name = caller.name ?: "Incoming call"
         val callType = extras.get("android.telecom.extra.CALL_TYPE")?.toString()
         val typeLabel = CallDetection.callTypeLabel(
@@ -177,7 +204,9 @@ class MapsNotificationListener : NotificationListenerService() {
         Log.i(
             TAG,
             "call alert prepared from $pkg " +
-                "(number available=${caller.number != null}, contact name available=${caller.name != null})",
+                "(national number available=${nationalNumber != null}, " +
+                "country code available=${numberParts.countryCode != null}, " +
+                "contact name available=${caller.name != null})",
         )
         Session.onAlert(
             ClusterAlert(
@@ -185,7 +214,8 @@ class MapsNotificationListener : NotificationListenerService() {
                 title = displayName,
                 subtitle = caller.number.orEmpty(),
                 key = key,
-                callerNumber = caller.number,
+                callerNumber = nationalNumber,
+                callerCountryCode = numberParts.countryCode,
                 callerName = displayName,
             ),
         )
@@ -198,10 +228,13 @@ class MapsNotificationListener : NotificationListenerService() {
         title: String,
         fallbackBody: String,
     ) {
+        cancelPendingMessageClear()
         val info = extractMessageInfo(extras, title, fallbackBody)
         val app = appLabel(pkg)
         val withText = RidePrefs.load(this).mirrorMessageText && info.body.isNotBlank()
-        val display = if (withText) info.body else when {
+        val display = if (withText) {
+            MessageTextFormatter.formatForCluster(info.title, info.body)
+        } else when {
             info.title.isNotBlank() && info.count > 1 -> "${info.title} ($app ${info.count})"
             info.title.isNotBlank() && app.isNotBlank() -> "${info.title} ($app)"
             info.title.isNotBlank() -> info.title
@@ -209,7 +242,10 @@ class MapsNotificationListener : NotificationListenerService() {
             else -> app.ifBlank { "Message" }
         }
         // Do not write message contents to the diagnostic log when text mirroring is enabled.
-        Log.i(TAG, "message from $pkg (text mirrored=$withText)")
+        Log.i(
+            TAG,
+            "message from $pkg (text mirrored=$withText, sender available=${info.title.isNotBlank()})",
+        )
         Session.onAlert(
             ClusterAlert(
                 kind = ClusterAlert.Kind.MESSAGE,
@@ -233,13 +269,26 @@ class MapsNotificationListener : NotificationListenerService() {
             val messages = style.messages
             val count = messages.size
             val newest = messages.lastOrNull()
-            val sender = conv.ifBlank {
-                newest?.senderPerson?.name?.toString()?.trim().orEmpty()
-            }
+            // In group conversations the conversation title is the group,
+            // not the person who sent the newest message.
+            val sender = newest?.senderPerson?.name?.toString()?.trim().orEmpty()
+                .ifBlank { conv }
             val body = newest?.text?.toString()?.trim().orEmpty().ifBlank { fallbackBody }
             return MessageInfo(sender.ifBlank { fallbackTitle }, count.coerceAtLeast(1), body)
         }
         return MessageInfo(fallbackTitle, 1, fallbackBody)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun callPersonName(extras: Bundle): String? {
+        val person = extras.getParcelable<Parcelable>("android.callPerson") as? Person
+        return person?.name?.toString()?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun cancelPendingMessageClear() {
+        pendingMessageClear?.let { handler.removeCallbacks(it) }
+        pendingMessageClear = null
+        pendingMessageClearKey = null
     }
 
     @Suppress("DEPRECATION")
@@ -262,7 +311,18 @@ class MapsNotificationListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         val removed = sbn ?: return
         val key = removed.key
-        Session.clearAlert(key)
+        val currentAlert = Session.alert.value
+        if (currentAlert?.kind == ClusterAlert.Kind.MESSAGE && currentAlert.key == key) {
+            cancelPendingMessageClear()
+            pendingMessageClearKey = key
+            pendingMessageClear = Runnable {
+                Session.clearAlert(key)
+                pendingMessageClear = null
+                pendingMessageClearKey = null
+            }.also { handler.postDelayed(it, MESSAGE_CLEAR_GRACE_MS) }
+        } else {
+            Session.clearAlert(key)
+        }
 
         if (activeNavKey == null || removed.key != activeNavKey) return
         activeNavKey = null
@@ -277,6 +337,8 @@ class MapsNotificationListener : NotificationListenerService() {
 
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingClear: Runnable? = null
+    private var pendingMessageClear: Runnable? = null
+    private var pendingMessageClearKey: String? = null
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -295,6 +357,7 @@ class MapsNotificationListener : NotificationListenerService() {
         private const val TAG = "MapsNavListener"
         private const val EXTRA_MESSAGING_STYLE_KEY = "android.messagingStyle"
         private const val CLEAR_GRACE_MS = 12_000L
+        private const val MESSAGE_CLEAR_GRACE_MS = 5_000L
 
         val DEFAULT_MAPS_PACKAGES = setOf(
             "com.google.android.apps.maps",
