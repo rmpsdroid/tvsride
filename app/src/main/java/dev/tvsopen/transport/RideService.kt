@@ -30,6 +30,7 @@ import dev.tvsopen.session.ParkedInfo
 import dev.tvsopen.session.Session
 import android.telephony.TelephonyManager
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
@@ -329,22 +330,68 @@ class RideService : android.app.Service() {
                 }
             }
             launch {
-                var lastAlert: ClusterAlert? = null
-                Session.alert.collect { alert ->
-                    val t = ble ?: return@collect
-                    if (t.state.value != ConnectionState.CONNECTED) {
-                        lastAlert = alert
+                var lastConnectedAlert: ClusterAlert? = null
+                var messageReplayJob: Job? = null
+
+                // Observe both values together. If a call or message arrives
+                // while BLE is down, the latest alert is sent when the link
+                // becomes CONNECTED again instead of being silently dropped.
+                combine(Session.alert, transport.state) { alert, state ->
+                    alert to state
+                }.collect { (alert, state) ->
+                    if (state != ConnectionState.CONNECTED) {
+                        messageReplayJob?.cancel()
+                        messageReplayJob = null
                         return@collect
                     }
-                    if (lastAlert?.kind == ClusterAlert.Kind.CALL &&
+
+                    if (lastConnectedAlert?.kind == ClusterAlert.Kind.CALL &&
                         alert?.kind != ClusterAlert.Kind.CALL
                     ) {
-                        sendCallEnded(driver, t)
+                        messageReplayJob?.cancel()
+                        messageReplayJob = null
+                        sendCallEnded(driver, transport)
                     }
-                    if (alert != null) {
-                        sendAlert(driver, t, alert)
+
+                    when (alert?.kind) {
+                        ClusterAlert.Kind.CALL -> {
+                            messageReplayJob?.cancel()
+                            messageReplayJob = null
+                            sendAlert(driver, transport, alert)
+                        }
+                        ClusterAlert.Kind.MESSAGE -> {
+                            messageReplayJob?.cancel()
+                            val text = alert.title.take(17)
+                            val frame = driver.buildSms(text)
+                                ?: PacketBuilder.textRow(OutboundId.SMS, text)
+                            messageReplayJob = launch {
+                                repeat(MESSAGE_ALERT_REPEAT_COUNT) { index ->
+                                    if (transport.state.value != ConnectionState.CONNECTED) {
+                                        return@launch
+                                    }
+                                    if (!transport.write(frame)) {
+                                        Log.w(
+                                            TAG,
+                                            "cluster message alert write failed (send ${index + 1})",
+                                        )
+                                        return@launch
+                                    }
+                                    if (index < MESSAGE_ALERT_REPEAT_COUNT - 1) {
+                                        delay(MESSAGE_ALERT_REPEAT_INTERVAL_MS)
+                                    }
+                                }
+                                Log.i(
+                                    TAG,
+                                    "cluster message alert replayed ($MESSAGE_ALERT_REPEAT_COUNT sends)",
+                                )
+                            }
+                        }
+                        null -> {
+                            messageReplayJob?.cancel()
+                            messageReplayJob = null
+                        }
                     }
-                    lastAlert = alert
+                    lastConnectedAlert = alert
                 }
             }
             launch {
@@ -695,6 +742,8 @@ class RideService : android.app.Service() {
         private const val TAG = "RideService"
         private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
         private const val CONNECT_ATTEMPT_TIMEOUT_MS = 20_000L
+        private const val MESSAGE_ALERT_REPEAT_COUNT = 3
+        private const val MESSAGE_ALERT_REPEAT_INTERVAL_MS = 1_500L
         const val CHANNEL = "ride"
         const val NOTIF_ID = 1
         const val ACTION_CONNECT = "dev.tvsopen.CONNECT"
