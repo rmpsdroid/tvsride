@@ -191,23 +191,26 @@ class MapsNotificationListener : NotificationListenerService() {
             ?: telephony?.networkCountryIso?.takeIf { it.isNotBlank() }
         val numberParts = CallerNumberFormatter.split(caller.number, region)
         val nationalNumber = numberParts.nationalNumber.takeIf { it.isNotBlank() }
-        val name = caller.name ?: "Incoming call"
+        val resolvedName = caller.name ?: ContactResolver.lookupName(this, caller.number)
         val callType = extras.get("android.telecom.extra.CALL_TYPE")?.toString()
         val typeLabel = CallDetection.callTypeLabel(
             title = "$title $text",
             rawCallType = callType,
             enabled = RidePrefs.load(this).mirrorCallDetails,
         )
-        val displayName = if (
-            typeLabel.isBlank() || name.startsWith(typeLabel, ignoreCase = true)
-        ) name else "$typeLabel $name"
+        val displayName = when {
+            resolvedName == null -> "Incoming call"
+            typeLabel.isBlank() || resolvedName.startsWith(typeLabel, ignoreCase = true) ->
+                resolvedName
+            else -> "$typeLabel $resolvedName"
+        }
 
         Log.i(
             TAG,
             "call alert prepared from $pkg " +
                 "(national number available=${nationalNumber != null}, " +
                 "country code available=${numberParts.countryCode != null}, " +
-                "contact name available=${caller.name != null})",
+                "contact name available=${resolvedName != null})",
         )
         Session.onAlert(
             ClusterAlert(
@@ -217,7 +220,7 @@ class MapsNotificationListener : NotificationListenerService() {
                 key = key,
                 callerNumber = nationalNumber,
                 callerCountryCode = numberParts.countryCode,
-                callerName = displayName,
+                callerName = resolvedName,
             ),
         )
     }
@@ -232,9 +235,11 @@ class MapsNotificationListener : NotificationListenerService() {
         cancelPendingMessageClear()
         val info = extractMessageInfo(extras, title, fallbackBody)
         val app = appLabel(pkg)
+        val resolvedSender = ContactResolver.lookupName(this, info.title) ?: info.title
+        val clusterSender = MessageTextFormatter.senderForCluster(resolvedSender)
         val withText = RidePrefs.load(this).mirrorMessageText && info.body.isNotBlank()
         val display = if (withText) {
-            MessageTextFormatter.formatForCluster(info.title, info.body)
+            MessageTextFormatter.formatForCluster(resolvedSender, info.body)
         } else when {
             info.title.isNotBlank() && info.count > 1 -> "${info.title} ($app ${info.count})"
             info.title.isNotBlank() && app.isNotBlank() -> "${info.title} ($app)"
@@ -245,7 +250,7 @@ class MapsNotificationListener : NotificationListenerService() {
         // Do not write message contents to the diagnostic log when text mirroring is enabled.
         Log.i(
             TAG,
-            "message from $pkg (text mirrored=$withText, sender available=${info.title.isNotBlank()})",
+            "message from $pkg (text mirrored=$withText, sender available=${clusterSender != null})",
         )
         Session.onAlert(
             ClusterAlert(
@@ -253,6 +258,8 @@ class MapsNotificationListener : NotificationListenerService() {
                 title = display,
                 subtitle = app,
                 key = key,
+                messageSender = clusterSender,
+                messageBody = info.body.takeIf { withText },
             ),
         )
     }
