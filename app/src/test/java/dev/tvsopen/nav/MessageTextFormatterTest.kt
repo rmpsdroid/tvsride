@@ -23,4 +23,14 @@ class MessageTextFormatterTest {
     fun showsSenderWhenBodyIsEmpty() {
         assertEquals("Alice", MessageTextFormatter.formatForCluster("Alice", ""))
     }
+    @Test
+    fun keepsPhoneNumberAsSenderWhenNoContactNameIsAvailable() {
+        assertEquals("+918220061501", MessageTextFormatter.senderForCluster("+918220061501"))
+    }
+
+    @Test
+    fun removesGenericMessagingAppLabelsFromSenderRow() {
+        assertEquals(null, MessageTextFormatter.senderForCluster("WhatsApp"))
+    }
+
 }
