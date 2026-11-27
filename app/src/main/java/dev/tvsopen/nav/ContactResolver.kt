@@ -14,7 +14,7 @@ import androidx.core.content.ContextCompat
  * sent anywhere except the already-authorized caller/message display packet.
  */
 internal object ContactResolver {
-    private val phonePattern = Regex("""^\\+?[0-9\\s().-]{6,}$""")
+    private val phonePattern = Regex("""^\+?[0-9\s().-]{6,}$""")
 
     fun lookupName(context: Context, rawNumber: String?): String? {
         val number = rawNumber?.trim()?.takeIf { phonePattern.matches(it) } ?: return null
