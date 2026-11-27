@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import dev.tvsopen.log.Log
 import dev.tvsopen.nav.NavInstruction
 import dev.tvsopen.nav.NavigationBridge
+import dev.tvsopen.nav.MessageTextFormatter
 import dev.tvsopen.prefs.RidePrefs
 import dev.tvsopen.protocol.ClusterFrames
 import dev.tvsopen.protocol.DashState
@@ -63,6 +64,10 @@ class RideService : android.app.Service() {
     private var linkWakeLock: android.os.PowerManager.WakeLock? = null
     private var hadLiveLink = false
     private var telephonyCallMonitor: TelephonyCallMonitor? = null
+    private var callFallbackJob: Job? = null
+    private var pendingMessageAlert: ClusterAlert? = null
+    private var pendingMessageAtMs: Long = 0L
+    private var lastSentMessageSignature: String? = null
     private var disconnectFinalizeJob: Job? = null
 
     private fun holdWakeLock() {
@@ -91,18 +96,33 @@ class RideService : android.app.Service() {
                 TelephonyManager.CALL_STATE_RINGING -> {
                     val mirrorCalls = RidePrefs.load(applicationContext).mirrorPhoneCalls
                     Session.setSimCallActive(mirrorCalls)
-                    if (mirrorCalls && Session.alert.value?.kind != ClusterAlert.Kind.CALL) {
-                        Session.onAlert(
-                            ClusterAlert(
-                                kind = ClusterAlert.Kind.CALL,
-                                title = "Incoming call",
-                                key = "telephony-sim-call",
-                                callerName = "Incoming call",
-                            ),
-                        )
+                    if (mirrorCalls) {
+                        // Samsung often posts the InCallUI notification a few
+                        // hundred milliseconds after TelephonyCallback.RINGING.
+                        // Wait for that richer event before sending any caller
+                        // packets, otherwise the cluster receives an empty
+                        // caller record first and may not refresh the popup.
+                        callFallbackJob?.cancel()
+                        callFallbackJob = scope.launch {
+                            delay(CALL_NOTIFICATION_GRACE_MS)
+                            if (Session.alert.value?.kind != ClusterAlert.Kind.CALL) {
+                                Session.onAlert(
+                                    ClusterAlert(
+                                        kind = ClusterAlert.Kind.CALL,
+                                        title = "Incoming call",
+                                        key = "telephony-sim-call",
+                                    ),
+                                )
+                                Log.i(TAG, "SIM call fallback alert published after notification wait")
+                            }
+                        }
                     }
                 }
-                TelephonyManager.CALL_STATE_IDLE -> Session.clearActiveCall()
+                TelephonyManager.CALL_STATE_IDLE -> {
+                    callFallbackJob?.cancel()
+                    callFallbackJob = null
+                    Session.clearActiveCall()
+                }
                 // OFFHOOK means the call was answered or outgoing. Keep the
                 // alert until IDLE so the cluster is not cleared mid-call.
                 else -> Unit
@@ -333,13 +353,61 @@ class RideService : android.app.Service() {
                 var lastConnectedAlert: ClusterAlert? = null
                 var messageReplayJob: Job? = null
 
-                // Observe both values together. If a call or message arrives
-                // while BLE is down, the latest alert is sent when the link
-                // becomes CONNECTED again instead of being silently dropped.
+                fun startMessageReplay() {
+                    if (messageReplayJob?.isActive == true) return
+                    messageReplayJob = launch {
+                        while (transport.state.value == ConnectionState.CONNECTED) {
+                            // Coalesce Samsung/WhatsApp notification updates
+                            // before sending. Updates no longer cancel the
+                            // previous message's repeat sequence.
+                            delay(MESSAGE_ALERT_DEBOUNCE_MS)
+                            val next = pendingMessageIfFresh() ?: break
+                            val signature = messageSignature(next)
+                            if (signature == lastSentMessageSignature) {
+                                if (pendingMessageAlert?.let(::messageSignature) == signature) {
+                                    pendingMessageAlert = null
+                                }
+                                break
+                            }
+
+                            val frames = buildMessageFrames(driver, next)
+                            if (frames.isEmpty()) break
+                            var complete = true
+                            repeat(MESSAGE_ALERT_REPEAT_COUNT) { index ->
+                                for (frame in frames) {
+                                    if (transport.state.value != ConnectionState.CONNECTED ||
+                                        !transport.write(frame)
+                                    ) {
+                                        complete = false
+                                        break
+                                    }
+                                }
+                                if (!complete) return@launch
+                                if (index < MESSAGE_ALERT_REPEAT_COUNT - 1) {
+                                    delay(MESSAGE_ALERT_REPEAT_INTERVAL_MS)
+                                }
+                            }
+
+                            lastSentMessageSignature = signature
+                            if (pendingMessageAlert?.let(::messageSignature) == signature) {
+                                pendingMessageAlert = null
+                            }
+                            Log.i(
+                                TAG,
+                                "cluster message alert replayed " +
+                                    "($MESSAGE_ALERT_REPEAT_COUNT sends, ${frames.size} rows)",
+                            )
+                        }
+                    }
+                }
+
+                // Observe both values together. Keep a pending message while
+                // BLE is disconnected so a short reconnect gap does not lose it.
                 combine(Session.alert, transport.state) { alert, state ->
                     alert to state
                 }.collect { (alert, state) ->
                     if (state != ConnectionState.CONNECTED) {
+                        if (alert?.kind == ClusterAlert.Kind.MESSAGE) rememberPendingMessage(alert)
                         messageReplayJob?.cancel()
                         messageReplayJob = null
                         return@collect
@@ -348,8 +416,6 @@ class RideService : android.app.Service() {
                     if (lastConnectedAlert?.kind == ClusterAlert.Kind.CALL &&
                         alert?.kind != ClusterAlert.Kind.CALL
                     ) {
-                        messageReplayJob?.cancel()
-                        messageReplayJob = null
                         sendCallEnded(driver, transport)
                     }
 
@@ -357,38 +423,21 @@ class RideService : android.app.Service() {
                         ClusterAlert.Kind.CALL -> {
                             messageReplayJob?.cancel()
                             messageReplayJob = null
+                            // Session owns any message that arrived during the
+                            // call and will restore it when the call ends.
+                            pendingMessageAlert = null
                             sendAlert(driver, transport, alert)
                         }
                         ClusterAlert.Kind.MESSAGE -> {
-                            messageReplayJob?.cancel()
-                            val text = alert.title.take(17)
-                            val frame = driver.buildSms(text)
-                                ?: PacketBuilder.textRow(OutboundId.SMS, text)
-                            messageReplayJob = launch {
-                                repeat(MESSAGE_ALERT_REPEAT_COUNT) { index ->
-                                    if (transport.state.value != ConnectionState.CONNECTED) {
-                                        return@launch
-                                    }
-                                    if (!transport.write(frame)) {
-                                        Log.w(
-                                            TAG,
-                                            "cluster message alert write failed (send ${index + 1})",
-                                        )
-                                        return@launch
-                                    }
-                                    if (index < MESSAGE_ALERT_REPEAT_COUNT - 1) {
-                                        delay(MESSAGE_ALERT_REPEAT_INTERVAL_MS)
-                                    }
-                                }
-                                Log.i(
-                                    TAG,
-                                    "cluster message alert replayed ($MESSAGE_ALERT_REPEAT_COUNT sends)",
-                                )
-                            }
+                            rememberPendingMessage(alert)
+                            startMessageReplay()
                         }
                         null -> {
-                            messageReplayJob?.cancel()
-                            messageReplayJob = null
+                            if (pendingMessageIfFresh() != null &&
+                                lastConnectedAlert?.kind != ClusterAlert.Kind.CALL
+                            ) {
+                                startMessageReplay()
+                            }
                         }
                     }
                     lastConnectedAlert = alert
@@ -509,8 +558,19 @@ class RideService : android.app.Service() {
         when (alert.kind) {
             ClusterAlert.Kind.CALL -> {
                 val number = alert.callerNumber.orEmpty()
-                val name = alert.callerName
-                    ?: alert.title.takeIf { it.isNotBlank() && it != number }
+                val name = alert.callerName?.takeUnless(::isGenericCallerLabel)
+                if (number.isBlank() && name.isNullOrBlank()) {
+                    val text = alert.title.takeIf { it.isNotBlank() } ?: "Incoming call"
+                    val frame = driver.buildTextRow(0, text)
+                        ?: PacketBuilder.textRow(OutboundId.TEXT_ROW1, text)
+                    if (transport.write(frame)) {
+                        Log.i(TAG, "cluster generic call text written")
+                    } else {
+                        Log.w(TAG, "cluster generic call text write failed")
+                    }
+                    return
+                }
+
                 val frames = driver.buildCallerFrames(number, alert.callerCountryCode, name)
                 if (frames.isNotEmpty()) {
                     var written = 0
@@ -528,7 +588,7 @@ class RideService : android.app.Service() {
                         number.takeIf { it.isNotBlank() },
                     ).joinToString(" ").ifBlank { alert.title }
                     val frame = driver.buildTextRow(0, text)
-                        ?: PacketBuilder.textRow(OutboundId.CALLER, text)
+                        ?: PacketBuilder.textRow(OutboundId.TEXT_ROW1, text)
                     if (transport.write(frame)) {
                         Log.i(TAG, "cluster generic call text written")
                     } else {
@@ -537,10 +597,9 @@ class RideService : android.app.Service() {
                 }
             }
             ClusterAlert.Kind.MESSAGE -> {
-                val text = alert.title.take(17)
-                Log.i(TAG, "cluster message alert sent (payload chars=${text.length})")
-                val frame = driver.buildSms(text) ?: PacketBuilder.textRow(OutboundId.SMS, text)
-                transport.write(frame)
+                val frames = buildMessageFrames(driver, alert)
+                for (frame in frames) transport.write(frame)
+                Log.i(TAG, "cluster message alert sent (${frames.size} text rows)")
             }
         }
     }
@@ -676,6 +735,8 @@ class RideService : android.app.Service() {
         reconnectJob = null
         disconnectFinalizeJob?.cancel()
         disconnectFinalizeJob = null
+        callFallbackJob?.cancel()
+        callFallbackJob = null
         telephonyCallMonitor?.stop()
         telephonyCallMonitor = null
         Session.clearActiveCall()
