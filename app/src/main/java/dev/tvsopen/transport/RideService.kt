@@ -366,8 +366,11 @@ class RideService : android.app.Service() {
                             if (signature == lastSentMessageSignature) {
                                 if (pendingMessageAlert?.let(::messageSignature) == signature) {
                                     pendingMessageAlert = null
+                                    break
                                 }
-                                break
+                                // A newer message may have arrived while the
+                                // previous alert was finishing; do not drop it.
+                                continue
                             }
 
                             val frames = buildMessageFrames(driver, next)
