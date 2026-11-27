@@ -71,6 +71,8 @@ data class ClusterAlert(
     val callerNumber: String? = null,
     val callerCountryCode: String? = null,
     val callerName: String? = null,
+    val messageSender: String? = null,
+    val messageBody: String? = null,
 ) {
     enum class Kind { CALL, MESSAGE }
 }
@@ -99,6 +101,7 @@ object Session {
     val alert: StateFlow<ClusterAlert?> = _alert.asStateFlow()
 
     private val _simCallActive = MutableStateFlow(false)
+    private val _pendingMessage = MutableStateFlow<ClusterAlert?>(null)
 
     private val _connection = MutableStateFlow(ConnectionState1())
     val connection: StateFlow<ConnectionState1> = _connection.asStateFlow()
@@ -298,6 +301,23 @@ object Session {
     }
 
     fun onAlert(alert: ClusterAlert?) {
+        when (alert?.kind) {
+            ClusterAlert.Kind.MESSAGE -> {
+                // Never let a message notification replace an active call.
+                // Keep the newest message and surface it after the call ends.
+                if (_alert.value?.kind == ClusterAlert.Kind.CALL) {
+                    _pendingMessage.value = alert
+                    return
+                }
+            }
+            ClusterAlert.Kind.CALL -> {
+                // A call takes priority over a message already on screen.
+                _alert.value?.takeIf { it.kind == ClusterAlert.Kind.MESSAGE }?.let {
+                    _pendingMessage.value = it
+                }
+            }
+            null -> Unit
+        }
         _alert.value = alert
     }
 
@@ -306,18 +326,29 @@ object Session {
     }
 
     fun clearAlert(key: String) {
+        if (_pendingMessage.value?.key == key) _pendingMessage.value = null
+
         val current = _alert.value ?: return
         if (current.key != key) return
         // Samsung removes/reposts its in-call notification when a call is
         // answered. The SIM state, not that notification lifecycle, owns the
         // lifetime of a mirrored cellular call.
         if (current.kind == ClusterAlert.Kind.CALL && _simCallActive.value) return
-        _alert.value = null
+
+        if (current.kind == ClusterAlert.Kind.CALL) {
+            _alert.value = _pendingMessage.value
+            _pendingMessage.value = null
+        } else {
+            _alert.value = null
+        }
     }
 
     fun clearActiveCall() {
         _simCallActive.value = false
-        if (_alert.value?.kind == ClusterAlert.Kind.CALL) _alert.value = null
+        if (_alert.value?.kind == ClusterAlert.Kind.CALL) {
+            _alert.value = _pendingMessage.value
+            _pendingMessage.value = null
+        }
     }
 
     private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
