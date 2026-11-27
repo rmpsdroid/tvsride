@@ -166,7 +166,7 @@ class MapsNotificationListener : NotificationListenerService() {
         val name = caller.name ?: "Incoming call"
         val callType = extras.get("android.telecom.extra.CALL_TYPE")?.toString()
         val typeLabel = CallDetection.callTypeLabel(
-            title = title,
+            title = "$title $text",
             rawCallType = callType,
             enabled = RidePrefs.load(this).mirrorCallDetails,
         )
