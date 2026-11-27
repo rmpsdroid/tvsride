@@ -102,4 +102,29 @@ class CallDetectionTest {
         )
         assertEquals("Alice", caller.name)
     }
+
+    @Test
+    fun samsungAssistReadyStatusIsNotMistakenForTheCallerName() {
+        val caller = CallDetection.extractCallerDetails(
+            address = null,
+            title = "Assist ready",
+            text = "",
+            sourceLabel = "Incallui",
+        )
+        assertNull(caller.name)
+    }
+
+    @Test
+    fun explicitPersonNameAndPhoneNumberExtrasTakePriorityOverSystemStatusText() {
+        val caller = CallDetection.extractCallerDetails(
+            address = null,
+            title = "Assist ready",
+            text = "Incoming call",
+            sourceLabel = "Incallui",
+            additionalNumbers = listOf("tel:+91 82200 61501"),
+            additionalNames = listOf("Alice Smith"),
+        )
+        assertEquals("+91 82200 61501", caller.number)
+        assertEquals("Alice Smith", caller.name)
+    }
 }
