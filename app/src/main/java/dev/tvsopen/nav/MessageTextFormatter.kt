@@ -16,12 +16,15 @@ internal object MessageTextFormatter {
         "notification",
     )
 
+    fun senderForCluster(sender: String?): String? =
+        sender?.trim()?.takeUnless {
+            it.isBlank() || it.lowercase(Locale.ROOT) in genericSenders
+        }
+
     fun formatForCluster(sender: String, body: String, maxChars: Int = 17): String {
         if (maxChars <= 0) return ""
 
-        val cleanSender = sender.trim().takeUnless {
-            it.isBlank() || it.lowercase(Locale.ROOT) in genericSenders
-        }
+        val cleanSender = senderForCluster(sender)
         val cleanBody = body.trim()
 
         if (cleanSender == null) return cleanBody.take(maxChars)
