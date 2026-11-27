@@ -94,6 +94,14 @@ interface ProtocolDriver {
     ): List<ByteArray> =
         buildCallerInfo(number, name, Command.CALL_RINGING)?.let { listOf(it) } ?: emptyList()
 
+    /**
+     * Caller-field reset sent after a call ends. Drivers with a documented
+     * multi-packet caller format can override this instead of fabricating a
+     * single-packet CALL_IDLE frame.
+     */
+    fun buildCallEndedFrames(): List<ByteArray> =
+        buildCallerInfo("", null, Command.CALL_IDLE)?.let { listOf(it) } ?: emptyList()
+
     /** `0x50` pictogram-by-name frame. 21 bytes; Jupiter only. */
     fun buildPictogram(name: String): ByteArray? = null
 

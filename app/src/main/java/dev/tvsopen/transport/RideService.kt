@@ -18,7 +18,6 @@ import dev.tvsopen.nav.NavInstruction
 import dev.tvsopen.nav.NavigationBridge
 import dev.tvsopen.prefs.RidePrefs
 import dev.tvsopen.protocol.ClusterFrames
-import dev.tvsopen.protocol.Command
 import dev.tvsopen.protocol.DashState
 import dev.tvsopen.protocol.DriverRegistry
 import dev.tvsopen.protocol.NtorqDriver
@@ -89,12 +88,15 @@ class RideService : android.app.Service() {
         telephonyCallMonitor = TelephonyCallMonitor(applicationContext) { callState ->
             when (callState) {
                 TelephonyManager.CALL_STATE_RINGING -> {
-                    if (Session.alert.value?.kind != ClusterAlert.Kind.CALL) {
+                    val mirrorCalls = RidePrefs.load(applicationContext).mirrorPhoneCalls
+                    Session.setSimCallActive(mirrorCalls)
+                    if (mirrorCalls && Session.alert.value?.kind != ClusterAlert.Kind.CALL) {
                         Session.onAlert(
                             ClusterAlert(
                                 kind = ClusterAlert.Kind.CALL,
                                 title = "Incoming call",
                                 key = "telephony-sim-call",
+                                callerName = "Incoming call",
                             ),
                         )
                     }
@@ -334,10 +336,13 @@ class RideService : android.app.Service() {
                         lastAlert = alert
                         return@collect
                     }
+                    if (lastAlert?.kind == ClusterAlert.Kind.CALL &&
+                        alert?.kind != ClusterAlert.Kind.CALL
+                    ) {
+                        sendCallEnded(driver, t)
+                    }
                     if (alert != null) {
                         sendAlert(driver, t, alert)
-                    } else if (lastAlert?.kind == ClusterAlert.Kind.CALL) {
-                        sendCallEnded(driver, t)
                     }
                     lastAlert = alert
                 }
@@ -456,15 +461,32 @@ class RideService : android.app.Service() {
     ) {
         when (alert.kind) {
             ClusterAlert.Kind.CALL -> {
-                val number = alert.subtitle.substringAfterLast('·').trim().ifBlank { alert.subtitle }
-                val name = alert.title.takeIf { it.isNotBlank() && it != number }
-                val frames = driver.buildCallerFrames(number, null, name)
+                val number = alert.callerNumber.orEmpty()
+                val name = alert.callerName
+                    ?: alert.title.takeIf { it.isNotBlank() && it != number }
+                val frames = driver.buildCallerFrames(number, alert.callerCountryCode, name)
                 if (frames.isNotEmpty()) {
-                    Log.i(TAG, "cluster call alert sent (${frames.size} frames; caller details redacted)")
-                    frames.forEach { transport.write(it) }
+                    var written = 0
+                    for (frame in frames) {
+                        if (transport.write(frame)) written++
+                    }
+                    if (written == frames.size) {
+                        Log.i(TAG, "cluster call alert written ($written caller frames; details redacted)")
+                    } else {
+                        Log.w(TAG, "cluster call alert write incomplete ($written/${frames.size} frames)")
+                    }
                 } else {
-                    val text = if (name != null) "$name $number" else number.ifBlank { alert.title }
-                    transport.write(PacketBuilder.textRow(OutboundId.CALLER, text))
+                    val text = listOfNotNull(
+                        name?.takeIf { it.isNotBlank() },
+                        number.takeIf { it.isNotBlank() },
+                    ).joinToString(" ").ifBlank { alert.title }
+                    val frame = driver.buildTextRow(0, text)
+                        ?: PacketBuilder.textRow(OutboundId.CALLER, text)
+                    if (transport.write(frame)) {
+                        Log.i(TAG, "cluster generic call text written")
+                    } else {
+                        Log.w(TAG, "cluster generic call text write failed")
+                    }
                 }
             }
             ClusterAlert.Kind.MESSAGE -> {
@@ -477,10 +499,19 @@ class RideService : android.app.Service() {
     }
 
     private suspend fun sendCallEnded(driver: ProtocolDriver, transport: ScooterBleService) {
-        val frame = driver.buildCallerInfo("", null, Command.CALL_IDLE)
-        if (frame != null) {
-            Log.i(TAG, "cluster call alert cleared")
-            transport.write(frame)
+        val frames = driver.buildCallEndedFrames()
+        if (frames.isEmpty()) {
+            Log.d(TAG, "driver has no caller-clear frame")
+            return
+        }
+        var written = 0
+        for (frame in frames) {
+            if (transport.write(frame)) written++
+        }
+        if (written == frames.size) {
+            Log.i(TAG, "cluster call alert cleared ($written caller-clear frames)")
+        } else {
+            Log.w(TAG, "cluster call clear incomplete ($written/${frames.size} frames)")
         }
     }
 
@@ -600,6 +631,7 @@ class RideService : android.app.Service() {
         disconnectFinalizeJob = null
         telephonyCallMonitor?.stop()
         telephonyCallMonitor = null
+        Session.clearActiveCall()
         recordParkedIfPossible()
         linkJob?.cancel()
         linkJob = null

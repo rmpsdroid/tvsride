@@ -102,17 +102,16 @@ object ClusterFrames {
     }
 
     /**
-     * The three-packet `0x43` caller sequence.
+     * The three-packet 0x43 caller sequence.
      *
-     * Each packet is `5B 43 subId <UTF-8 text> 00-pad to 17 chars FF` — 3 header
-     * bytes, 17 text bytes, one terminator, so 21 bytes. Stock sends sub `01`
-     * (national number), then `03` (country code), then `02` (contact name, only
-     * when non-empty), in that order.
+     * Stock sends sub 01 (national number) and sub 03 (country code) in that
+     * order, followed by sub 02 (contact name) only when non-empty. Keep the
+     * first two packets even when Android cannot expose a number: omitting
+     * them leaves the cluster without the start of the caller record.
      *
-     * The official app pads by `String.length()` (chars) while encoding UTF-8
+     * The official app pads by String.length() (chars) while encoding UTF-8
      * bytes, so non-ASCII text can make the packet longer than its nominal size
-     * and the terminator lands late. That behaviour is mirrored deliberately:
-     * "fixing" it here would differ from the app the cluster was tested against.
+     * and the terminator lands late. That behaviour is mirrored deliberately.
      */
     fun callerFrames(
         nationalNumber: String?,
@@ -120,12 +119,8 @@ object ClusterFrames {
         contactName: String?,
     ): List<ByteArray> {
         val out = ArrayList<ByteArray>(3)
-        if (!nationalNumber.isNullOrBlank()) {
-            out += callerPacket(CallerSub.NATIONAL_NUMBER, nationalNumber)
-        }
-        if (!countryCode.isNullOrBlank()) {
-            out += callerPacket(CallerSub.COUNTRY_CODE, countryCode)
-        }
+        out += callerPacket(CallerSub.NATIONAL_NUMBER, nationalNumber.orEmpty())
+        out += callerPacket(CallerSub.COUNTRY_CODE, countryCode.orEmpty())
         if (!contactName.isNullOrBlank()) {
             out += callerPacket(CallerSub.CONTACT_NAME, contactName)
         }

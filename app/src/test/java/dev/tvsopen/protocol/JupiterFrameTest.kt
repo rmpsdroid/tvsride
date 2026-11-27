@@ -116,10 +116,30 @@ class JupiterFrameTest {
     }
 
     @Test
-    fun `caller sequence omits empty name but keeps number and country`() {
+    fun `caller sequence always sends number and country fields but omits empty name`() {
         val frames = ClusterFrames.callerFrames("9876543210", null, "")
-        assertEquals(1, frames.size)
-        assertEquals(1, frames[0][2].toInt() and 0xFF)
+        assertEquals(2, frames.size)
+        assertEquals(listOf(1, 3), frames.map { it[2].toInt() and 0xFF })
+        assertEquals("9876543210", String(frames[0], 3, 10, Charsets.UTF_8))
+        assertEquals("", String(frames[1], 3, 17, Charsets.UTF_8).trimEnd('\u0000'))
+    }
+
+    @Test
+    fun `numberless incoming call still sends both numeric fields before its label`() {
+        val frames = ClusterFrames.callerFrames("", null, "Incoming call")
+        assertEquals(listOf(1, 3, 2), frames.map { it[2].toInt() and 0xFF })
+        assertEquals("", String(frames[0], 3, 17, Charsets.UTF_8).trimEnd('\u0000'))
+        assertEquals("", String(frames[1], 3, 17, Charsets.UTF_8).trimEnd('\u0000'))
+        assertEquals("Incoming call", String(frames[2], 3, 17, Charsets.UTF_8).trimEnd('\u0000'))
+    }
+
+    @Test
+    fun `Jupiter call end clears the two numeric caller fields`() {
+        val frames = JupiterDriver(VehicleModel.JUPITER_125).buildCallEndedFrames()
+        assertEquals(listOf(1, 3), frames.map { it[2].toInt() and 0xFF })
+        assertTrue(frames.all { frame ->
+            String(frame, 3, 17, Charsets.UTF_8).trimEnd('\u0000').isEmpty()
+        })
     }
 
     @Test

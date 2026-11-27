@@ -156,19 +156,27 @@ class MapsNotificationListener : NotificationListenerService() {
     }
 
     private fun postCall(key: String, pkg: String, extras: Bundle, title: String, text: String) {
-        val number = extras.getString("android.telecom.extra.INCOMING_CALL_ADDRESS")
-            ?: extras.getString("android.text")
-            ?: text.takeIf { it.isNotBlank() }
-            ?: ""
-        val name = title.ifBlank { number }.ifBlank { "Incoming call" }
-        val label = appLabel(pkg).takeUnless { it == "Phone" } ?: ""
-        Log.i(TAG, "call alert prepared from $pkg (caller details available=${number.isNotBlank()})")
+        val address = extras.get("android.telecom.extra.INCOMING_CALL_ADDRESS")?.toString()
+        val caller = CallDetection.extractCallerDetails(
+            address = address,
+            title = title,
+            text = text,
+            sourceLabel = appLabel(pkg),
+        )
+        val name = caller.name ?: "Incoming call"
+        Log.i(
+            TAG,
+            "call alert prepared from $pkg " +
+                "(number available=${caller.number != null}, contact name available=${caller.name != null})",
+        )
         Session.onAlert(
             ClusterAlert(
                 kind = ClusterAlert.Kind.CALL,
                 title = name,
-                subtitle = if (label.isNotBlank() && number.isNotBlank()) "$label · $number" else number.ifBlank { label },
+                subtitle = caller.number.orEmpty(),
                 key = key,
+                callerNumber = caller.number,
+                callerName = name,
             ),
         )
     }

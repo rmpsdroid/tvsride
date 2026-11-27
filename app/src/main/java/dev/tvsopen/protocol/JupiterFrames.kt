@@ -259,6 +259,9 @@ class JupiterDriver(
         name: String?,
     ): List<ByteArray> = ClusterFrames.callerFrames(number, countryCode, name)
 
+    override fun buildCallEndedFrames(): List<ByteArray> =
+        ClusterFrames.callerFrames("", "", null)
+
     override fun buildPictogram(name: String): ByteArray? = ClusterFrames.pictogram(name)
 
     override fun buildMediaMeta(dataId: Int, text: String): ByteArray? =

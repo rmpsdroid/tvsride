@@ -68,6 +68,9 @@ data class ClusterAlert(
     val title: String,
     val subtitle: String = "",
     val key: String = "",
+    val callerNumber: String? = null,
+    val callerCountryCode: String? = null,
+    val callerName: String? = null,
 ) {
     enum class Kind { CALL, MESSAGE }
 }
@@ -94,6 +97,8 @@ object Session {
 
     private val _alert = MutableStateFlow<ClusterAlert?>(null)
     val alert: StateFlow<ClusterAlert?> = _alert.asStateFlow()
+
+    private val _simCallActive = MutableStateFlow(false)
 
     private val _connection = MutableStateFlow(ConnectionState1())
     val connection: StateFlow<ConnectionState1> = _connection.asStateFlow()
@@ -296,11 +301,22 @@ object Session {
         _alert.value = alert
     }
 
+    fun setSimCallActive(active: Boolean) {
+        _simCallActive.value = active
+    }
+
     fun clearAlert(key: String) {
-        if (_alert.value?.key == key) _alert.value = null
+        val current = _alert.value ?: return
+        if (current.key != key) return
+        // Samsung removes/reposts its in-call notification when a call is
+        // answered. The SIM state, not that notification lifecycle, owns the
+        // lifetime of a mirrored cellular call.
+        if (current.kind == ClusterAlert.Kind.CALL && _simCallActive.value) return
+        _alert.value = null
     }
 
     fun clearActiveCall() {
+        _simCallActive.value = false
         if (_alert.value?.kind == ClusterAlert.Kind.CALL) _alert.value = null
     }
 
