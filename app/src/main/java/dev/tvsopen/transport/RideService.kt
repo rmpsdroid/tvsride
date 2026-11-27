@@ -491,7 +491,7 @@ class RideService : android.app.Service() {
             }
             ClusterAlert.Kind.MESSAGE -> {
                 val text = alert.title.take(17)
-                Log.i(TAG, "cluster message alert: '$text'")
+                Log.i(TAG, "cluster message alert sent (payload chars=${text.length})")
                 val frame = driver.buildSms(text) ?: PacketBuilder.textRow(OutboundId.SMS, text)
                 transport.write(frame)
             }
