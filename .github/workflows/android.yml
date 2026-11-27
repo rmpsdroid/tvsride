@@ -123,7 +123,10 @@ jobs:
                    android.permission.BLUETOOTH_SCAN \
                    android.permission.POST_NOTIFICATIONS \
                    android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS \
-                   android.permission.RECEIVE_BOOT_COMPLETED; do
+                   android.permission.RECEIVE_BOOT_COMPLETED \
+                   android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE \
+                   android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND \
+                   android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND; do
             grep -q "$p" permissions.txt || { echo "::error::missing $p"; exit 1; }
           done
           echo "OK: expected BLE permissions present"

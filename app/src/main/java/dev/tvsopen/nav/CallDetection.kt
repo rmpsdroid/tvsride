@@ -46,6 +46,16 @@ internal object CallDetection {
         return CALL_PHRASES.any { phrase -> content.contains(phrase) }
     }
 
+    /** Returns the optional short label used for missed or outgoing calls. */
+    fun callTypeLabel(title: String, rawCallType: String?, enabled: Boolean): String {
+        if (!enabled) return ""
+        return when {
+            title.contains("missed", ignoreCase = true) -> "Missed"
+            title.contains("outgoing", ignoreCase = true) || rawCallType == "2" -> "Out"
+            else -> ""
+        }
+    }
+
     /**
      * Extract only a real-looking telephone number. Telecom exposes the
      * incoming address as a Uri on some Android builds, so callers must pass
@@ -127,6 +137,8 @@ internal object CallDetection {
 
     private val CALL_PHRASES = listOf(
         "incoming call",
+        "missed call",
+        "outgoing call",
         "voice call",
         "video call",
         "is calling",
