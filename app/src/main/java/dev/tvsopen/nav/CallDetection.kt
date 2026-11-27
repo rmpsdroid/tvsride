@@ -36,6 +36,18 @@ internal object CallDetection {
         "restricted",
         "withheld",
         "caller",
+        "assist ready",
+        "assistant ready",
+        "voice assistant ready",
+        "call in progress",
+        "ongoing call",
+        "active call",
+        "call ended",
+        "call waiting",
+        "dialing",
+        "dialling",
+        "connecting",
+        "connecting call",
     )
 
     fun isPhoneSource(packageName: String): Boolean =
@@ -69,14 +81,19 @@ internal object CallDetection {
         title: String,
         text: String,
         sourceLabel: String? = null,
+        additionalNumbers: List<String?> = emptyList(),
+        additionalNames: List<String?> = emptyList(),
     ): CallerDetails {
-        val addressNumber = addressNumber(address)
-        val number = sequenceOf(addressNumber, title.trim(), text.trim())
+        val number = (
+            sequenceOf(addressNumber(address)) +
+                additionalNumbers.asSequence().map(::addressNumber) +
+                sequenceOf(title.trim(), text.trim())
+            )
             .filterNotNull()
             .firstOrNull(::isPhoneNumber)
 
-        val name = sequenceOf(title, text)
-            .map(::cleanCallerName)
+        val name = (additionalNames.asSequence() + sequenceOf(title, text))
+            .map { cleanCallerName(it.orEmpty()) }
             .firstOrNull { candidate ->
                 candidate.isNotBlank() &&
                     candidate != number &&
