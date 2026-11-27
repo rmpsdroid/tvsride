@@ -432,10 +432,14 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
             val address = pendingCompanionAddress
             pendingCompanionAddress = null
-            if (result.resultCode == RESULT_OK && address != null) {
+            if (
+                result.resultCode == RESULT_OK &&
+                address != null &&
+                RidePrefs.load(this).autoConnect
+            ) {
                 startObservingCompanion(address)
             } else {
-                Log.w("MainActivity", "vehicle association was not completed")
+                Log.w("MainActivity", "vehicle association was not completed or auto-connect was disabled")
             }
         }
 
