@@ -550,6 +550,59 @@ class RideService : android.app.Service() {
         }
     }
 
+    private fun rememberPendingMessage(alert: ClusterAlert) {
+        val signature = messageSignature(alert)
+        if (signature == lastSentMessageSignature) return
+        pendingMessageAlert = alert
+        pendingMessageAtMs = System.currentTimeMillis()
+    }
+
+    private fun pendingMessageIfFresh(): ClusterAlert? {
+        val pending = pendingMessageAlert ?: return null
+        if (System.currentTimeMillis() - pendingMessageAtMs > MAX_PENDING_MESSAGE_AGE_MS) {
+            pendingMessageAlert = null
+            return null
+        }
+        return pending
+    }
+
+    private fun messageSignature(alert: ClusterAlert): String = listOf(
+        alert.key,
+        alert.messageSender.orEmpty(),
+        alert.messageBody.orEmpty(),
+        alert.title,
+    ).joinToString("|")
+
+    private fun buildMessageFrames(
+        driver: ProtocolDriver,
+        alert: ClusterAlert,
+    ): List<ByteArray> {
+        if (driver.capabilities.textMessages) {
+            val sender = MessageTextFormatter.senderForCluster(alert.messageSender)
+            val body = alert.messageBody?.trim()?.takeIf { it.isNotBlank() }
+            val frames = mutableListOf<ByteArray>()
+            val senderFrame = sender?.let { driver.buildTextRow(0, it) }
+            if (senderFrame != null) frames += senderFrame
+            val bodyRow = if (senderFrame != null) 1 else 0
+            body?.let { driver.buildTextRow(bodyRow, it) }?.let(frames::add)
+            if (frames.isNotEmpty()) return frames
+        }
+
+        val text = alert.title.take(17)
+        val frame = driver.buildSms(text) ?: PacketBuilder.textRow(OutboundId.SMS, text)
+        return listOf(frame)
+    }
+
+    private fun isGenericCallerLabel(value: String): Boolean =
+        value.trim().lowercase(Locale.ROOT) in setOf(
+            "incoming call",
+            "call",
+            "unknown",
+            "unknown caller",
+            "private number",
+            "unknown number",
+        )
+
     private suspend fun sendAlert(
         driver: ProtocolDriver,
         transport: ScooterBleService,
@@ -805,6 +858,9 @@ class RideService : android.app.Service() {
         private const val CONNECT_ATTEMPT_TIMEOUT_MS = 20_000L
         private const val MESSAGE_ALERT_REPEAT_COUNT = 3
         private const val MESSAGE_ALERT_REPEAT_INTERVAL_MS = 1_500L
+        private const val MESSAGE_ALERT_DEBOUNCE_MS = 250L
+        private const val MAX_PENDING_MESSAGE_AGE_MS = 120_000L
+        private const val CALL_NOTIFICATION_GRACE_MS = 1_200L
         const val CHANNEL = "ride"
         const val NOTIF_ID = 1
         const val ACTION_CONNECT = "dev.tvsopen.CONNECT"
