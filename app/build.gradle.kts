@@ -17,8 +17,8 @@ val hasReleaseKey = keyProps.getProperty("storeFile")
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 val ciShortSha = System.getenv("GITHUB_SHA")?.take(7)
-val baseVersionName = "0.2.7"
-val computedVersionCode = ciRunNumber ?: 10
+val baseVersionName = "0.2.9"
+val computedVersionCode = ciRunNumber ?: 12
 val computedVersionName = when {
     ciRunNumber != null && !ciShortSha.isNullOrBlank() -> "$baseVersionName-r$ciRunNumber.$ciShortSha"
     ciRunNumber != null -> "$baseVersionName-r$ciRunNumber"
