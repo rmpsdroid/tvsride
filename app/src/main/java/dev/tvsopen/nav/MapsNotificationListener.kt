@@ -288,7 +288,6 @@ class MapsNotificationListener : NotificationListenerService() {
     private fun cancelPendingMessageClear() {
         pendingMessageClear?.let { handler.removeCallbacks(it) }
         pendingMessageClear = null
-        pendingMessageClearKey = null
     }
 
     @Suppress("DEPRECATION")
@@ -314,11 +313,9 @@ class MapsNotificationListener : NotificationListenerService() {
         val currentAlert = Session.alert.value
         if (currentAlert?.kind == ClusterAlert.Kind.MESSAGE && currentAlert.key == key) {
             cancelPendingMessageClear()
-            pendingMessageClearKey = key
             pendingMessageClear = Runnable {
                 Session.clearAlert(key)
                 pendingMessageClear = null
-                pendingMessageClearKey = null
             }.also { handler.postDelayed(it, MESSAGE_CLEAR_GRACE_MS) }
         } else {
             Session.clearAlert(key)
@@ -338,7 +335,6 @@ class MapsNotificationListener : NotificationListenerService() {
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingClear: Runnable? = null
     private var pendingMessageClear: Runnable? = null
-    private var pendingMessageClearKey: String? = null
 
     override fun onListenerConnected() {
         super.onListenerConnected()
