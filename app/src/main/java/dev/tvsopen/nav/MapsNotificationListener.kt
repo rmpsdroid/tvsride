@@ -110,7 +110,7 @@ class MapsNotificationListener : NotificationListenerService() {
         val isMessage = hasMessageStyle || category == Notification.CATEGORY_MESSAGE ||
             selectedMessage || anyAppMessage
         if (isMessage && prefs.mirrorMessages) {
-            postMessage(n.key, pkg, extras, title)
+            postMessage(n.key, pkg, extras, title, bigText.ifBlank { text })
         }
     }
 
@@ -164,6 +164,16 @@ class MapsNotificationListener : NotificationListenerService() {
             sourceLabel = appLabel(pkg),
         )
         val name = caller.name ?: "Incoming call"
+        val callType = extras.get("android.telecom.extra.CALL_TYPE")?.toString()
+        val typeLabel = CallDetection.callTypeLabel(
+            title = title,
+            rawCallType = callType,
+            enabled = RidePrefs.load(this).mirrorCallDetails,
+        )
+        val displayName = if (
+            typeLabel.isBlank() || name.startsWith(typeLabel, ignoreCase = true)
+        ) name else "$typeLabel $name"
+
         Log.i(
             TAG,
             "call alert prepared from $pkg " +
@@ -172,26 +182,34 @@ class MapsNotificationListener : NotificationListenerService() {
         Session.onAlert(
             ClusterAlert(
                 kind = ClusterAlert.Kind.CALL,
-                title = name,
+                title = displayName,
                 subtitle = caller.number.orEmpty(),
                 key = key,
                 callerNumber = caller.number,
-                callerName = name,
+                callerName = displayName,
             ),
         )
     }
 
-    private fun postMessage(key: String, pkg: String, extras: Bundle, title: String) {
-        val info = extractMessageInfo(extras, title)
+    private fun postMessage(
+        key: String,
+        pkg: String,
+        extras: Bundle,
+        title: String,
+        fallbackBody: String,
+    ) {
+        val info = extractMessageInfo(extras, title, fallbackBody)
         val app = appLabel(pkg)
-        val display = when {
+        val withText = RidePrefs.load(this).mirrorMessageText && info.body.isNotBlank()
+        val display = if (withText) info.body else when {
             info.title.isNotBlank() && info.count > 1 -> "${info.title} ($app ${info.count})"
             info.title.isNotBlank() && app.isNotBlank() -> "${info.title} ($app)"
             info.title.isNotBlank() -> info.title
             info.count > 1 -> "$app: ${info.count} msgs"
             else -> app.ifBlank { "Message" }
         }
-        Log.i(TAG, "message from $pkg: '$display'")
+        // Do not write message contents to the diagnostic log when text mirroring is enabled.
+        Log.i(TAG, "message from $pkg (text mirrored=$withText)")
         Session.onAlert(
             ClusterAlert(
                 kind = ClusterAlert.Kind.MESSAGE,
@@ -202,20 +220,26 @@ class MapsNotificationListener : NotificationListenerService() {
         )
     }
 
-    private data class MessageInfo(val title: String, val count: Int)
+    private data class MessageInfo(val title: String, val count: Int, val body: String)
 
-    private fun extractMessageInfo(extras: Bundle, fallbackTitle: String): MessageInfo {
+    private fun extractMessageInfo(
+        extras: Bundle,
+        fallbackTitle: String,
+        fallbackBody: String,
+    ): MessageInfo {
         val style = extractMessagingStyle(extras)
         if (style != null) {
             val conv = style.conversationTitle?.toString()?.trim().orEmpty()
             val messages = style.messages
             val count = messages.size
+            val newest = messages.lastOrNull()
             val sender = conv.ifBlank {
-                messages.lastOrNull()?.senderPerson?.name?.toString()?.trim().orEmpty()
+                newest?.senderPerson?.name?.toString()?.trim().orEmpty()
             }
-            return MessageInfo(sender.ifBlank { fallbackTitle }, count.coerceAtLeast(1))
+            val body = newest?.text?.toString()?.trim().orEmpty().ifBlank { fallbackBody }
+            return MessageInfo(sender.ifBlank { fallbackTitle }, count.coerceAtLeast(1), body)
         }
-        return MessageInfo(fallbackTitle, 1)
+        return MessageInfo(fallbackTitle, 1, fallbackBody)
     }
 
     @Suppress("DEPRECATION")
