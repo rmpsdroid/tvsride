@@ -347,8 +347,8 @@ object Session {
         _simCallActive.value = false
         if (_alert.value?.kind == ClusterAlert.Kind.CALL) {
             _alert.value = _pendingMessage.value
-            _pendingMessage.value = null
         }
+        _pendingMessage.value = null
     }
 
     private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
