@@ -282,6 +282,7 @@ class MapsNotificationListener : NotificationListenerService() {
 
     @Suppress("DEPRECATION")
     private fun callPersonName(extras: Bundle): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
         val person = extras.getParcelable<Parcelable>("android.callPerson") as? Person
         return person?.name?.toString()?.trim()?.takeIf { it.isNotBlank() }
     }
