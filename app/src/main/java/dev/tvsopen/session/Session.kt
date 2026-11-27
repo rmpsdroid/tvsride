@@ -73,6 +73,7 @@ data class ClusterAlert(
     val callerName: String? = null,
     val messageSender: String? = null,
     val messageBody: String? = null,
+    val messagePostedAtMs: Long = 0L,
 ) {
     enum class Kind { CALL, MESSAGE }
 }
