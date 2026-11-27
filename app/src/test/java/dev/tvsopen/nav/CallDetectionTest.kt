@@ -25,6 +25,8 @@ class CallDetectionTest {
     @Test
     fun phoneCallPhrasesAreRecognizedCaseInsensitively() {
         assertTrue(CallDetection.looksLikeCall("Incoming call", "Mobile"))
+        assertTrue(CallDetection.looksLikeCall("Missed call from Alice", "Mobile"))
+        assertTrue(CallDetection.looksLikeCall("Outgoing call", "Mobile"))
         assertTrue(CallDetection.looksLikeCall("John", "is calling"))
         assertTrue(CallDetection.looksLikeCall("", "RINGING"))
     }
