@@ -36,6 +36,15 @@ class CallDetectionTest {
     }
 
     @Test
+    fun callTypeLabelsAreOptInAndUseTheAvailableCallType() {
+        assertEquals("", CallDetection.callTypeLabel("Missed call", null, false))
+        assertEquals("Missed", CallDetection.callTypeLabel("Missed call from Alice", null, true))
+        assertEquals("Out", CallDetection.callTypeLabel("Alice", "2", true))
+        assertEquals("Out", CallDetection.callTypeLabel("Outgoing call", null, true))
+        assertEquals("", CallDetection.callTypeLabel("Incoming call", "1", true))
+    }
+
+    @Test
     fun telecomTelUriIsExtractedAsTheCallerNumber() {
         val caller = CallDetection.extractCallerDetails(
             address = "tel:+1-202-555-0147",
