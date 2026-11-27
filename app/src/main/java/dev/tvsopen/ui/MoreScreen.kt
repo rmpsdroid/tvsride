@@ -312,7 +312,7 @@ fun MoreScreen(
                             Text("Messages", style = MaterialTheme.typography.bodyLarge)
                             Text(
                                 "Show sender and app (WhatsApp, Telegram, SMS, etc.). " +
-                                    "Message text can be enabled separately below.",
+                                    "The optional message-text setting below replaces this line with the message body.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
