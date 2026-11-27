@@ -137,6 +137,8 @@ internal object CallDetection {
 
     private val CALL_PHRASES = listOf(
         "incoming call",
+        "missed call",
+        "outgoing call",
         "voice call",
         "video call",
         "is calling",
