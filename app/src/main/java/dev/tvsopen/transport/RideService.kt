@@ -571,6 +571,7 @@ class RideService : android.app.Service() {
         alert.messageSender.orEmpty(),
         alert.messageBody.orEmpty(),
         alert.title,
+        alert.messagePostedAtMs.toString(),
     ).joinToString("|")
 
     private fun buildMessageFrames(
