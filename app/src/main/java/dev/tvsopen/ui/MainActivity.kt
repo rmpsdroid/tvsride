@@ -140,6 +140,7 @@ class MainActivity : AppCompatActivity() {
                     if (enabled) {
                         prefs.lastAddress?.let { setUpCompanion(it) }
                     } else {
+                        pendingCompanionAddress = null
                         stopObservingCompanion()
                     }
                 },
