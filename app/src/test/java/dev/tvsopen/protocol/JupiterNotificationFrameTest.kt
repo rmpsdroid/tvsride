@@ -1,7 +1,6 @@
 package dev.tvsopen.protocol
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class JupiterNotificationFrameTest {
