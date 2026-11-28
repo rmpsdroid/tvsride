@@ -286,6 +286,20 @@ class MainActivity : AppCompatActivity() {
                             onOpenNotificationAccess = onOpenNotificationAccess,
                             onScan = onScan,
                             onDisconnect = onDisconnect,
+                            navMirroring = navMirroring,
+                            onNavMirrorChange = { on ->
+                                navMirroring = on
+                                RidePrefs.load(this@MainActivity).navigationMirroring = on
+                                onNavMirrorChange(
+                                    if (on) RideService.ACTION_START_NAV
+                                    else RideService.ACTION_STOP_NAV,
+                                )
+                            },
+                            rideMode = rideMode,
+                            onRideModeChange = { on ->
+                                RidePrefs.load(this@MainActivity).updateRideMode(on)
+                                Session.setRideMode(on)
+                            },
                             onSetBrightness = { level ->
                                 sendWithExtras(RideService.ACTION_SET_BRIGHTNESS) {
                                     putExtra(RideService.EXTRA_VALUE, level)
