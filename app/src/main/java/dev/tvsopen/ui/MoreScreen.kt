@@ -66,6 +66,7 @@ import dev.tvsopen.data.DataExport
 import dev.tvsopen.prefs.RidePrefs
 import dev.tvsopen.protocol.ClusterFrames
 import dev.tvsopen.protocol.Confidence
+import dev.tvsopen.protocol.DriverRegistry
 import dev.tvsopen.protocol.Pictograms
 import dev.tvsopen.transport.ConnectionState
 import dev.tvsopen.transport.label
@@ -100,6 +101,9 @@ fun MoreScreen(
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val categories = SettingsCategory.values().toList()
+    val capabilities = remember(connection.model) {
+        DriverRegistry.forModel(connection.model).capabilities
+    }
     val filteredCategories = remember(searchQuery) {
         val queryTerms = searchQuery.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
         if (queryTerms.isEmpty()) categories
@@ -156,13 +160,18 @@ fun MoreScreen(
                         SettingsCategory.CONNECTION ->
                             if (autoConnect) "Automatic connection is enabled" else "Automatic connection is off"
                         SettingsCategory.NAVIGATION ->
-                            if (navMirroring) "Turn-by-turn mirroring is on" else "Turn-by-turn mirroring is off"
+                            if (!capabilities.navigationHud) "Not supported by this scooter"
+                            else if (navMirroring) "Turn-by-turn mirroring is on" else "Turn-by-turn mirroring is off"
                         SettingsCategory.CALLS_MESSAGES ->
-                            if (notificationAccessGranted) "Notification access is granted" else "Notification access needed"
+                            if (!capabilities.callerId && !capabilities.textMessages) "Not supported by this scooter"
+                            else if (notificationAccessGranted) "Notification access is granted" else "Notification access needed"
                         SettingsCategory.CLUSTER_DISPLAY ->
-                            riderName?.let { "Cluster greeting: $it" } ?: "Rider name, brightness and timers"
+                            if (!capabilities.riderName && !capabilities.brightness && !capabilities.calibration)
+                                "No cluster display controls available"
+                            else riderName?.let { "Cluster greeting: $it" } ?: "Rider name, brightness and timers"
                         SettingsCategory.RIDE_PREFERENCES ->
-                            if (rideMode) "Ride Mode resumes after reboot" else "Ride Mode resume is off"
+                            if (!capabilities.keepalive) "Ride Mode control not supported"
+                            else if (rideMode) "Ride Mode resumes after reboot" else "Ride Mode resume is off"
                         SettingsCategory.APPEARANCE -> "Theme and screen-awake preferences"
                         SettingsCategory.DATA_PRIVACY -> "Local ride history and data export"
                         SettingsCategory.ADVANCED -> "Diagnostics, protocol confidence and test information"
