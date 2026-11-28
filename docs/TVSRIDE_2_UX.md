@@ -242,10 +242,18 @@ Implemented on this branch:
 - Added unit coverage for Generic, Jupiter and Ntorq capability declarations.
 - Corrected the Ntorq capability declaration for calibration: the current driver does not implement a calibration frame builder, so the UI no longer offers those controls.
 
+### Milestone 4 — diagnostics health and safer export
+
+Implemented on this branch:
+- Added a Diagnostics health snapshot with selected model, current Bluetooth state, last successful link from the session log, last telemetry frame, reconnect attempts and Bluetooth / notification / phone permission status.
+- Added a clock-sync capability status, explicitly marked as pending hardware confirmation rather than claiming that the scooter clock has been verified.
+- Kept raw BLE frames available in the on-device DEBUG viewer.
+- Changed shared log export to omit raw BLE payloads, because those opaque bytes can contain caller or message content; existing readable MAC, route, caller, message and parked-location redaction remains.
+- Clarified that exported diagnostics are redacted and raw frames are not included.
+
 ### Remaining work
 
-- Complete the Diagnostics lifecycle timeline and permission/clock-sync summary.
 - Run CI unit tests and Android debug build for this milestone, then review the new APK.
-- Review the category index and each Settings page on the target phone for readability and navigation.
+- Review the category index, Settings pages and Diagnostics snapshot on the target phone.
 - Test Bluetooth scanning, connection, telemetry freshness, reconnect and vehicle commands with the actual Jupiter 110.
 - Complete daylight, dark-mode and real-ride checks; screenshots without scooter hardware are not hardware verification.
