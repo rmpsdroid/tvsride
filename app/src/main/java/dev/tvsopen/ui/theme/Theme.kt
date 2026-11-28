@@ -19,8 +19,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * Palette, mapped from the token set in `DESIGN.md` (Coinbase-inspired
- * system: single blue accent, white canvas, near-black dark canvas).
+ * Palette, mapped from the TVSRide token set in `DESIGN.md`:
+ * neutral surfaces, a restrained blue accent and clear semantic status colours.
  *
  * Token mapping (light / dark):
  * - primary #0052FF both; CTAs stay blue on either canvas per the system.
@@ -147,11 +147,8 @@ private val AppTypography = Typography(
 )
 
 /**
- * Tabular numerals, per `DESIGN.md` (`number-display`, weight 500, mono).
- * System monospace: the licensed brand mono has an Inter/JetBrains substitute
- * on the web, but this app ships no fonts and requests no network, so the
- * platform face is the honest stand-in. Applied to telemetry readouts only,
- * never to prose.
+ * Tabular numerals for measurements, using the Android system monospace face.
+ * Applied to telemetry readouts only, never to prose.
  */
 val NumberStyle = TextStyle(
     fontFamily = FontFamily.Monospace,
