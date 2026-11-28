@@ -104,6 +104,11 @@ fun RideScreen(
         else -> "Telemetry is stale · last update ${ageMs / 1_000}s ago"
     }
 
+    // A stale speed reading can be dangerous if it looks current. Hide all
+    // live values once the stream is stale or the Bluetooth link is down.
+    val freshTelemetry = connected && ageMs != null && ageMs < Telemetry.STALE_AFTER_MS
+    val displayTelemetry = if (freshTelemetry) telemetry else Telemetry()
+
     Column(
         modifier
             .fillMaxSize()
@@ -149,7 +154,7 @@ fun RideScreen(
                 )
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
-                        telemetry.speedKmh?.toString() ?: "—",
+                        displayTelemetry.speedKmh?.toString() ?: "—",
                         style = NumberStyle.copy(fontSize = 58.sp, lineHeight = 62.sp),
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
@@ -162,7 +167,7 @@ fun RideScreen(
                     )
                 }
                 Text(
-                    if (telemetry.isFresh()) "Latest reading from your cluster"
+                    if (freshTelemetry) "Latest reading from your cluster"
                     else "Waiting for a fresh reading",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
@@ -176,21 +181,21 @@ fun RideScreen(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Filled.LocalGasStation,
                 label = "Fuel",
-                value = telemetry.fuelBars?.let { "$it / ${Telemetry.FUEL_BAR_MAX}" } ?: "—",
+                value = displayTelemetry.fuelBars?.let { "$it / ${Telemetry.FUEL_BAR_MAX}" } ?: "—",
                 unit = "bars",
             )
             VehicleMetric(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Filled.Speed,
                 label = "Engine",
-                value = telemetry.engineRpm?.toString() ?: "—",
+                value = displayTelemetry.engineRpm?.toString() ?: "—",
                 unit = "rpm",
             )
             VehicleMetric(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Filled.Place,
                 label = "Range",
-                value = telemetry.distanceToEmptyKm?.toString() ?: "—",
+                value = displayTelemetry.distanceToEmptyKm?.toString() ?: "—",
                 unit = "km",
             )
         }
@@ -249,11 +254,11 @@ fun RideScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Speed, "Top speed",
-                    telemetry.topSpeedKmh?.toString() ?: "—", "km/h",
+                    displayTelemetry.topSpeedKmh?.toString() ?: "—", "km/h",
                 )
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Place, "Odometer",
-                    telemetry.odometerKm?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "—",
+                    displayTelemetry.odometerKm?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "—",
                     "km",
                 )
             }
@@ -261,13 +266,13 @@ fun RideScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Route, "This connection",
-                    telemetry.connectedDistanceKm()?.let {
+                    displayTelemetry.connectedDistanceKm()?.let {
                         String.format(java.util.Locale.US, "%.1f", it)
                     } ?: "—", "km",
                 )
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.BatteryChargingFull, "Battery",
-                    telemetry.batteryVoltage?.let { String.format(java.util.Locale.US, "%.1f", it / 10.0) }
+                    displayTelemetry.batteryVoltage?.let { String.format(java.util.Locale.US, "%.1f", it / 10.0) }
                         ?: "—", "V",
                 )
             }
@@ -275,18 +280,18 @@ fun RideScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Thermostat, "Coolant",
-                    telemetry.engineTempC?.toString() ?: "—", "°C",
+                    displayTelemetry.engineTempC?.toString() ?: "—", "°C",
                 )
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Speed, "Average economy",
-                    telemetry.avgEconomyKmpl?.toString() ?: "—", "km/l",
+                    displayTelemetry.avgEconomyKmpl?.toString() ?: "—", "km/l",
                 )
             }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Build, "Service",
-                    when (telemetry.serviceDue) {
+                    when (displayTelemetry.serviceDue) {
                         true -> "Due"
                         false -> "OK"
                         null -> "—"
@@ -294,8 +299,8 @@ fun RideScreen(
                 )
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Warning, "Check engine",
-                    when (telemetry.milOn) {
-                        true -> telemetry.milBlinkCode?.takeIf { it > 0 }?.let { "On ($it)" } ?: "On"
+                    when (displayTelemetry.milOn) {
+                        true -> displayTelemetry.milBlinkCode?.takeIf { it > 0 }?.let { "On ($it)" } ?: "On"
                         false -> "Off"
                         null -> "—"
                     }, "",
@@ -305,11 +310,11 @@ fun RideScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Speed, "Instant economy",
-                    telemetry.instantEconomyKmpl?.toString() ?: "—", "km/l",
+                    displayTelemetry.instantEconomyKmpl?.toString() ?: "—", "km/l",
                 )
                 VehicleMetric(
                     Modifier.weight(1f), Icons.Filled.Build, "Firmware",
-                    telemetry.softwareVersion ?: "—", "",
+                    displayTelemetry.softwareVersion ?: "—", "",
                 )
             }
         }
