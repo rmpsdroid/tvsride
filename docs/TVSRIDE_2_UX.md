@@ -2,7 +2,7 @@
 
 **Status:** Proposed design baseline  
 **Scope:** Information architecture, screen responsibilities, settings inventory, visual principles  
-**Implementation status:** Design only; the existing app and working branch remain unchanged.
+**Implementation status:** First UI milestone implemented on this branch: Ride / Trips / Settings navigation, a ride-first dashboard, local Trips history, and a Settings entry to Diagnostics. BLE protocol and service code have not been changed.
 
 ## 1. Product design goals
 
@@ -206,3 +206,25 @@ Preserve verified protocol code and tests independently of the UI redesign. Do n
 - Unsupported or unverified features are never presented as working.
 - No existing verified protocol behaviour is removed as part of a visual redesign.
 - The interface remains readable and usable on a phone in both light and dark themes.
+
+
+## 10. Implementation progress
+
+### Milestone 1 — primary navigation and rider dashboard
+
+Implemented in the current design branch:
+- Replaced the four primary destinations with Ride, Trips and Settings.
+- Added a Ride-first dashboard with connection state, telemetry freshness, current speed, fuel, RPM and range.
+- Added expandable vehicle information.
+- Hid live telemetry values when the connection is down or the last frame is stale.
+- Moved ride history into its own Trips destination.
+- Moved live logs behind Settings → Advanced & Diagnostics.
+- Retained the existing Bluetooth actions, navigation mirroring, Find My, ride-resume toggle and cluster controls.
+
+### Remaining work
+
+- Split the long Settings page into dedicated task-based category screens.
+- Add Settings search and clearer permission status / recovery guidance.
+- Review visual hierarchy and spacing against screenshots on the target phone.
+- Run CI unit tests and Android debug build, then review the resulting APK.
+- Test the new navigation and connection states without scooter hardware; do not treat simulator output as hardware verification.
