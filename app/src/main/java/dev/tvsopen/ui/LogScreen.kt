@@ -12,11 +12,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -27,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +50,7 @@ import dev.tvsopen.log.LogRecord
  * that every protocol fix was based on something observed rather than assumed.
  */
 @Composable
-fun LogScreen(modifier: Modifier = Modifier) {
+fun LogScreen(modifier: Modifier = Modifier, onBack: (() -> Unit)? = null) {
 
     val ctx = LocalContext.current
     val records by Log.records.collectAsStateWithLifecycle()
@@ -74,6 +77,17 @@ fun LogScreen(modifier: Modifier = Modifier) {
     }
 
     Column(modifier.fillMaxSize()) {
+        if (onBack != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+                Text("Advanced diagnostics", style = MaterialTheme.typography.titleLarge)
+            }
+        }
         Card(
             Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
