@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.tvsopen.session.ParkedInfo
 import dev.tvsopen.session.Ride
 import dev.tvsopen.session.Session
 import java.text.SimpleDateFormat
@@ -30,7 +31,7 @@ import java.util.Locale
 
 /** Local ride history, kept separate from configuration and live riding controls. */
 @Composable
-fun TripsScreen(modifier: Modifier = Modifier) {
+fun TripsScreen(modifier: Modifier = Modifier, parked: ParkedInfo? = null) {
     val rides by Session.rides.collectAsStateWithLifecycle()
     val totalRides by Session.totalRides.collectAsStateWithLifecycle()
     val totalDistanceKm by Session.totalRideDistanceKm.collectAsStateWithLifecycle()
@@ -63,6 +64,20 @@ fun TripsScreen(modifier: Modifier = Modifier) {
                     value = String.format(Locale.US, "%.1f", totalDistanceKm),
                     label = "Total km",
                 )
+            }
+        }
+        if (parked != null) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Last parked", style = MaterialTheme.typography.titleSmall)
+                        Text(parked.label ?: "Location saved",
+                            style = MaterialTheme.typography.bodyMedium)
+                        Text(dateFormat.format(Date(parked.atMillis)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
         item {
