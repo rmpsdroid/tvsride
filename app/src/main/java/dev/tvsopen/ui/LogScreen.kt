@@ -1,5 +1,27 @@
 package dev.tvsopen.ui
 
+import java.util.Locale
+
+import java.util.Date
+
+import java.text.SimpleDateFormat
+
+import dev.tvsopen.transport.label
+
+import dev.tvsopen.session.Telemetry
+
+import dev.tvsopen.session.ConnectionState1
+
+import dev.tvsopen.protocol.DriverRegistry
+
+import androidx.compose.ui.text.style.TextAlign
+
+import androidx.core.content.ContextCompat
+
+import android.content.pm.PackageManager
+
+import android.Manifest
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -50,12 +72,58 @@ import dev.tvsopen.log.LogRecord
  * that every protocol fix was based on something observed rather than assumed.
  */
 @Composable
-fun LogScreen(modifier: Modifier = Modifier, onBack: (() -> Unit)? = null) {
+fun LogScreen(
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+    connection: ConnectionState1 = ConnectionState1(),
+    telemetry: Telemetry = Telemetry(),
+    hasBluetoothPermission: Boolean = false,
+    hasNotificationAccess: Boolean = false,
+) {
 
     val ctx = LocalContext.current
     val records by Log.records.collectAsStateWithLifecycle()
     val frameCount by Log.frameCount.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val driver = remember(connection.model) { DriverRegistry.forModel(connection.model) }
+    val callPermissionsGranted = remember(ctx) {
+        listOf(
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.READ_CALL_LOG,
+        ).all {
+            ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+    val lastConnectedRecord = remember(records) {
+        records.lastOrNull {
+            it.tag == "RideService" &&
+                (it.message == "state -> CONNECTED" ||
+                    (it.message.contains("reconnect attempt #") && it.message.endsWith("connected")))
+        }
+    }
+    val reconnectAttempts = remember(records) {
+        records.asSequence()
+            .filter { it.tag == "RideService" && it.message.contains("reconnect #") }
+            .mapNotNull { Regex("reconnect #(\\d+)").find(it.message)?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            .distinct()
+            .count()
+    }
+    val lastFrameAgeMs = telemetry.lastFrameAt.takeIf { it > 0L }
+        ?.let { (System.currentTimeMillis() - it).coerceAtLeast(0L) }
+    val lastFrameLabel = when {
+        lastFrameAgeMs == null -> "No telemetry received"
+        lastFrameAgeMs < 3_000L -> "Live"
+        else -> "${lastFrameAgeMs / 1_000}s ago"
+    }
+    val lastConnectedLabel = lastConnectedRecord?.let {
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it.atMillis))
+    } ?: "No successful link in this session"
+    val reconnectLabel = if (reconnectAttempts == 0) "None recorded"
+        else "$reconnectAttempts attempt(s) logged"
+    val clockSyncLabel = if (driver.capabilities.timeSync && driver.capabilities.keepalive)
+        "Included in keepalive · hardware check pending"
+    else "Not supported by this model"
     // Default to INFO, not DEBUG. Raw hex frames are DEBUG records, and a live
     // link produces one per channel per second at best; opening the tab on
     // DEBUG buried the events that explain a session (service created,
@@ -134,6 +202,18 @@ fun LogScreen(modifier: Modifier = Modifier, onBack: (() -> Unit)? = null) {
             }
         }
 
+        DiagnosticsStatusCard(
+            modelName = connection.model.displayName,
+            connectionState = connection.state.label,
+            lastConnected = lastConnectedLabel,
+            lastFrame = lastFrameLabel,
+            reconnectAttempts = reconnectLabel,
+            bluetoothPermission = hasBluetoothPermission,
+            notificationAccess = hasNotificationAccess,
+            callPermissions = callPermissionsGranted,
+            clockSync = clockSyncLabel,
+        )
+
         HorizontalDivider()
 
         if (visible.isEmpty()) {
@@ -152,6 +232,53 @@ fun LogScreen(modifier: Modifier = Modifier, onBack: (() -> Unit)? = null) {
                 items(visible) { r -> LogRow(r) }
             }
         }
+    }
+}
+
+@Composable
+private fun DiagnosticsStatusCard(
+    modelName: String,
+    connectionState: String,
+    lastConnected: String,
+    lastFrame: String,
+    reconnectAttempts: String,
+    bluetoothPermission: Boolean,
+    notificationAccess: Boolean,
+    callPermissions: Boolean,
+    clockSync: String,
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Connection health", style = MaterialTheme.typography.titleMedium)
+            Text(modelName, style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            DiagnosticStatusRow("Bluetooth", connectionState)
+            DiagnosticStatusRow("Last successful link", lastConnected)
+            DiagnosticStatusRow("Last telemetry frame", lastFrame)
+            DiagnosticStatusRow("Reconnect attempts", reconnectAttempts)
+            HorizontalDivider()
+            DiagnosticStatusRow("Bluetooth permission", if (bluetoothPermission) "Granted" else "Missing")
+            DiagnosticStatusRow("Notification access", if (notificationAccess) "Granted" else "Missing")
+            DiagnosticStatusRow("Phone / call permissions", if (callPermissions) "Granted" else "Incomplete")
+            DiagnosticStatusRow("Clock sync capability", clockSync)
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticStatusRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(label, Modifier.weight(0.9f), style = MaterialTheme.typography.bodySmall)
+        Text(
+            value,
+            Modifier.weight(1.1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.End,
+        )
     }
 }
 
