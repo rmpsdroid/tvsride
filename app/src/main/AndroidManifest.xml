@@ -48,6 +48,12 @@
          not limited to a hardcoded package list. Read-only; sees no app data. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!-- Opt-in companion-device presence lets Android wake the app when the
+         associated scooter cluster becomes reachable, without a constant scan. -->
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
     <!-- "Last Parked" has to be recorded while the phone is in a pocket with
          the screen off, which only a background location grant permits. -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
@@ -96,6 +102,13 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <!-- Companion Device Manager association is required for presence-based
+         auto-connect. Optional so devices without this capability can still
+         install and use manual BLE connection. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -118,6 +131,15 @@
             android:name=".transport.RideService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <service
+            android:name=".transport.VehiclePresenceService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
 
         <!-- Re-attach after reboot. Gated on the user having left the app in a
              riding state; see BootReceiver. -->

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /** One ride: a connected period, open or closed. */
 data class Ride(
@@ -21,17 +22,18 @@ data class Ride(
     }
 }
 
+/**
+ * Local ride history. The ride list and lifetime totals are committed in one
+ * SharedPreferences transaction so a process death cannot update only half
+ * of the history.
+ */
 class RideLog(context: Context) {
-
     private val sp = context.applicationContext
         .getSharedPreferences("tvsride", Context.MODE_PRIVATE)
-
     private val _rides = MutableStateFlow(load())
-
     val rides: StateFlow<List<Ride>> = _rides.asStateFlow()
 
     val totalRides: Int get() = sp.getInt(KEY_TOTAL, 0)
-
     val totalDistanceKm: Double
         get() = sp.getString(KEY_DIST, null)?.toDoubleOrNull() ?: 0.0
 
@@ -42,12 +44,12 @@ class RideLog(context: Context) {
             Ride(
                 startedAt = o.optLong("s"),
                 endedAt = if (o.isNull("e")) null else o.optLong("e"),
-                distanceKm = o.optDouble("d", 0.0),
+                distanceKm = o.optDouble("d", 0.0).coerceAtLeast(0.0),
             )
         }
     }.getOrDefault(emptyList())
 
-    private fun persist(list: List<Ride>) {
+    private fun encode(list: List<Ride>): String {
         val arr = JSONArray()
         list.take(MAX_RIDES).forEach { r ->
             arr.put(
@@ -57,47 +59,63 @@ class RideLog(context: Context) {
                     .put("d", r.distanceKm),
             )
         }
-        sp.edit().putString(KEY, arr.toString()).apply()
-        _rides.value = list.take(MAX_RIDES)
+        return arr.toString()
     }
 
+    @Synchronized
+    private fun persist(list: List<Ride>) {
+        val bounded = list.take(MAX_RIDES)
+        sp.edit().putString(KEY, encode(bounded)).commit()
+        _rides.value = bounded
+    }
+
+    @Synchronized
     fun start(now: Long = System.currentTimeMillis()) {
-        var current = _rides.value
-        val open = current.firstOrNull()
-        if (open?.inProgress == true) {
+        val current = _rides.value
+        val open = current.firstOrNull()?.takeIf { it.inProgress }
+        if (open != null) {
+            // Never silently replace a live ride. A stale ride is finalized
+            // through the same totals transaction before a new one is opened.
             if (now - open.startedAt < STALE_OPEN_RIDE_MS) return
-            current = if (open.distanceKm >= MIN_RIDE_DISTANCE_KM) {
-                listOf(open.copy(endedAt = now)) + current.drop(1)
-            } else {
-                current.drop(1)
-            }
-            persist(current)
+            finish(now)
         }
         persist(listOf(Ride(now, null, 0.0)) + _rides.value)
+        LogRide.event("started")
     }
 
+    @Synchronized
     fun update(distanceKm: Double) {
+        if (!distanceKm.isFinite() || distanceKm < 0.0) return
         val current = _rides.value
-        val open = current.firstOrNull() ?: return
-        if (!open.inProgress || distanceKm < 0) return
-        if ((distanceKm * 10).toLong() == (open.distanceKm * 10).toLong()) return
-        persist(listOf(open.copy(distanceKm = distanceKm)) + current.drop(1))
+        val open = current.firstOrNull()?.takeIf { it.inProgress } ?: return
+        val ticks = (distanceKm * 10.0).roundToInt().coerceAtLeast(0)
+        val oldTicks = (open.distanceKm * 10.0).roundToInt().coerceAtLeast(0)
+        if (ticks <= oldTicks) return
+        val roundedKm = ticks / 10.0
+        persist(listOf(open.copy(distanceKm = roundedKm)) + current.drop(1))
     }
 
-    /** Closes the open ride and folds it into the running totals, dropping < 0.1 km ghost reconnects. */
+    /** Finalizes an open ride and updates lifetime totals atomically. */
+    @Synchronized
     fun finish(now: Long = System.currentTimeMillis()) {
         val current = _rides.value
-        val open = current.firstOrNull() ?: return
-        if (!open.inProgress) return
+        val open = current.firstOrNull()?.takeIf { it.inProgress } ?: return
         if (open.distanceKm < MIN_RIDE_DISTANCE_KM) {
             persist(current.drop(1))
+            LogRide.event("discarded-short")
             return
         }
-        sp.edit()
+
+        val editor = sp.edit()
+            .putString(KEY, encode(listOf(open.copy(endedAt = now)) + current.drop(1)))
             .putInt(KEY_TOTAL, totalRides + 1)
             .putString(KEY_DIST, (totalDistanceKm + open.distanceKm).toString())
-            .apply()
-        persist(listOf(open.copy(endedAt = now)) + current.drop(1))
+        if (!editor.commit()) {
+            LogRide.event("finish-persist-failed")
+            return
+        }
+        _rides.value = (listOf(open.copy(endedAt = now)) + current.drop(1)).take(MAX_RIDES)
+        LogRide.event("finished")
     }
 
     companion object {
@@ -106,7 +124,13 @@ class RideLog(context: Context) {
         private const val KEY_DIST = "ride_total_distance"
         private const val MAX_RIDES = 100
         private const val MIN_RIDE_DISTANCE_KM = 0.1
-
         private const val STALE_OPEN_RIDE_MS = 6 * 60 * 60 * 1000L
+    }
+}
+
+/** Kept deliberately local to avoid coupling persistence to the app logger. */
+private object LogRide {
+    fun event(name: String) {
+        android.util.Log.i("RideLog", name)
     }
 }

@@ -72,6 +72,26 @@ class RidePrefs private constructor(private val ctx: Context) {
         get() = sp.getBoolean(KEY_MIRROR_ANY_APP_NOTIFICATIONS, false)
         set(value) { sp.edit().putBoolean(KEY_MIRROR_ANY_APP_NOTIFICATIONS, value).apply() }
 
+    /** Opt-in: include the newest notification message body in the cluster alert. */
+    var mirrorMessageText: Boolean
+        get() = sp.getBoolean(KEY_MIRROR_MESSAGE_TEXT, false)
+        set(value) { sp.edit().putBoolean(KEY_MIRROR_MESSAGE_TEXT, value).apply() }
+
+    /** Opt-in: label missed and outgoing calls when the notification exposes the type. */
+    var mirrorCallDetails: Boolean
+        get() = sp.getBoolean(KEY_MIRROR_CALL_DETAILS, false)
+        set(value) { sp.edit().putBoolean(KEY_MIRROR_CALL_DETAILS, value).apply() }
+
+    /** Opt-in: let Android wake the app when the associated scooter is nearby. */
+    var autoConnect: Boolean
+        get() = sp.getBoolean(KEY_AUTO_CONNECT, false)
+        set(value) { sp.edit().putBoolean(KEY_AUTO_CONNECT, value).apply() }
+
+    /** Address currently observed through CompanionDeviceManager, if any. */
+    var observedCompanion: String?
+        get() = sp.getString(KEY_OBSERVED_COMPANION, null)
+        set(value) { sp.edit().putString(KEY_OBSERVED_COMPANION, value).apply() }
+
     var keepScreenOn by mutableStateOf(sp.getBoolean(KEY_KEEP_SCREEN_ON, false))
         private set
 
@@ -146,6 +166,10 @@ class RidePrefs private constructor(private val ctx: Context) {
         private const val KEY_EXTRA_MESSAGE_PACKAGES = "extra_message_packages"
         private const val KEY_EXTRA_CALL_PACKAGES = "extra_call_packages"
         private const val KEY_MIRROR_ANY_APP_NOTIFICATIONS = "mirror_any_app_notifications"
+        private const val KEY_MIRROR_MESSAGE_TEXT = "mirror_message_text"
+        private const val KEY_MIRROR_CALL_DETAILS = "mirror_call_details"
+        private const val KEY_AUTO_CONNECT = "auto_connect"
+        private const val KEY_OBSERVED_COMPANION = "observed_companion"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_PARKED_AT = "parked_at"
         private const val KEY_PARKED_LABEL = "parked_label"

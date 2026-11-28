@@ -76,6 +76,8 @@ fun MoreScreen(
     onRiderNameChange: (String?) -> Unit,
     keepScreenOn: Boolean,
     onKeepScreenOnChange: (Boolean) -> Unit,
+    autoConnect: Boolean,
+    onAutoConnectChange: (Boolean) -> Unit,
     notificationAccessGranted: Boolean,
     onOpenNotificationAccess: () -> Unit,
     onScan: () -> Unit,
@@ -95,6 +97,35 @@ fun MoreScreen(
         }
 
         item { DozeCard() }
+
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                "Auto-connect near vehicle",
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                "Android 12+: connect when your associated scooter becomes " +
+                                    "reachable, even if the app is closed.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        AppSwitch(
+                            checked = autoConnect,
+                            onCheckedChange = onAutoConnectChange,
+                        )
+                    }
+                }
+            }
+        }
 
         item {
             Text("APPEARANCE", style = MaterialTheme.typography.labelMedium,
@@ -246,6 +277,8 @@ fun MoreScreen(
             val prefs = remember { RidePrefs.load(ctx) }
             var mirrorCalls by remember { mutableStateOf(prefs.mirrorPhoneCalls) }
             var mirrorMessages by remember { mutableStateOf(prefs.mirrorMessages) }
+            var mirrorText by remember { mutableStateOf(prefs.mirrorMessageText) }
+            var callDetails by remember { mutableStateOf(prefs.mirrorCallDetails) }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(
@@ -278,7 +311,8 @@ fun MoreScreen(
                         Column(Modifier.weight(1f).padding(end = 12.dp)) {
                             Text("Messages", style = MaterialTheme.typography.bodyLarge)
                             Text(
-                                "Show sender and app (WhatsApp, Telegram, SMS, etc.). Message text is never sent.",
+                                "Show sender and app (WhatsApp, Telegram, SMS, etc.). " +
+                                    "The optional message-text setting below replaces this line with the message body.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -310,6 +344,51 @@ fun MoreScreen(
                         AppSwitch(
                             checked = prefs.mirrorAnyAppNotifications,
                             onCheckedChange = { prefs.mirrorAnyAppNotifications = it },
+                        )
+                    }
+                    HorizontalDivider()
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Show message text", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Send up to 17 characters of the newest message body to the " +
+                                    "scooter display over Bluetooth. Nothing is uploaded to TVS.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        AppSwitch(
+                            checked = mirrorText,
+                            onCheckedChange = {
+                                mirrorText = it
+                                prefs.mirrorMessageText = it
+                            },
+                        )
+                    }
+                    HorizontalDivider()
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Show call type", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Add Missed or Out to the caller name when Android provides that information.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        AppSwitch(
+                            checked = callDetails,
+                            onCheckedChange = {
+                                callDetails = it
+                                prefs.mirrorCallDetails = it
+                            },
                         )
                     }
                 }

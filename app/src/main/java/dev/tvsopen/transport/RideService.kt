@@ -16,9 +16,9 @@ import androidx.core.content.ContextCompat
 import dev.tvsopen.log.Log
 import dev.tvsopen.nav.NavInstruction
 import dev.tvsopen.nav.NavigationBridge
+import dev.tvsopen.nav.MessageTextFormatter
 import dev.tvsopen.prefs.RidePrefs
 import dev.tvsopen.protocol.ClusterFrames
-import dev.tvsopen.protocol.Command
 import dev.tvsopen.protocol.DashState
 import dev.tvsopen.protocol.DriverRegistry
 import dev.tvsopen.protocol.NtorqDriver
@@ -29,6 +29,10 @@ import dev.tvsopen.protocol.VehicleModel
 import dev.tvsopen.session.ClusterAlert
 import dev.tvsopen.session.ParkedInfo
 import dev.tvsopen.session.Session
+import android.telephony.TelephonyManager
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,7 +62,14 @@ class RideService : android.app.Service() {
     private var reconnectAttempt = 0
     private var tearingDown = false
     private var linkWakeLock: android.os.PowerManager.WakeLock? = null
+    private var reconnectWakeLock: android.os.PowerManager.WakeLock? = null
     private var hadLiveLink = false
+    private var telephonyCallMonitor: TelephonyCallMonitor? = null
+    private var callFallbackJob: Job? = null
+    private var pendingMessageAlert: ClusterAlert? = null
+    private var pendingMessageAtMs: Long = 0L
+    private var lastSentMessageSignature: String? = null
+    private var disconnectFinalizeJob: Job? = null
 
     private fun holdWakeLock() {
         if (linkWakeLock?.isHeld == true) return
@@ -77,10 +88,74 @@ class RideService : android.app.Service() {
         linkWakeLock = null
     }
 
+    /**
+     * Keep the CPU awake for the first few short reconnect windows. Without
+     * this, Android can defer the coroutine delay while the screen is off:
+     * the log showed a 5-second retry not running for ~96 seconds. The timeout
+     * is bounded and later long-backoff attempts rely on companion presence.
+     */
+    private fun holdReconnectWakeLock(timeoutMs: Long) {
+        val pm = getSystemService(android.os.PowerManager::class.java) ?: return
+        val lock = reconnectWakeLock ?: pm.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "TVSRide:reconnect",
+        ).apply {
+            setReferenceCounted(false)
+        }.also { reconnectWakeLock = it }
+        if (!lock.isHeld) {
+            lock.acquire(timeoutMs.coerceAtLeast(1_000L))
+            Log.i(TAG, "reconnect wake lock held for ${timeoutMs}ms")
+        }
+    }
+
+    private fun releaseReconnectWakeLock() {
+        runCatching {
+            if (reconnectWakeLock?.isHeld == true) reconnectWakeLock?.release()
+        }
+        reconnectWakeLock = null
+    }
+
     override fun onCreate() {
         super.onCreate()
         Log.enableFileSink(java.io.File(filesDir, "logs"))
         Session.attachRideLog(applicationContext)
+        telephonyCallMonitor = TelephonyCallMonitor(applicationContext) { callState ->
+            when (callState) {
+                TelephonyManager.CALL_STATE_RINGING -> {
+                    val mirrorCalls = RidePrefs.load(applicationContext).mirrorPhoneCalls
+                    Session.setSimCallActive(mirrorCalls)
+                    if (mirrorCalls) {
+                        // Samsung often posts the InCallUI notification a few
+                        // hundred milliseconds after TelephonyCallback.RINGING.
+                        // Wait for that richer event before sending any caller
+                        // packets, otherwise the cluster receives an empty
+                        // caller record first and may not refresh the popup.
+                        callFallbackJob?.cancel()
+                        callFallbackJob = scope.launch {
+                            delay(CALL_NOTIFICATION_GRACE_MS)
+                            if (Session.alert.value?.kind != ClusterAlert.Kind.CALL) {
+                                Session.onAlert(
+                                    ClusterAlert(
+                                        kind = ClusterAlert.Kind.CALL,
+                                        title = "Incoming call",
+                                        key = "telephony-sim-call",
+                                    ),
+                                )
+                                Log.i(TAG, "SIM call fallback alert published after notification wait")
+                            }
+                        }
+                    }
+                }
+                TelephonyManager.CALL_STATE_IDLE -> {
+                    callFallbackJob?.cancel()
+                    callFallbackJob = null
+                    Session.clearActiveCall()
+                }
+                // OFFHOOK means the call was answered or outgoing. Keep the
+                // alert until IDLE so the cluster is not cleared mid-call.
+                else -> Unit
+            }
+        }.also { it.start() }
         Log.i(TAG, "service created (v${dev.tvsopen.BuildConfig.VERSION_NAME}, sdk ${android.os.Build.VERSION.SDK_INT})")
 
         try {
@@ -154,12 +229,15 @@ class RideService : android.app.Service() {
         connect(address, model)
     }
 
-    fun connect(address: String, model: VehicleModel): Boolean {
+    fun connect(address: String, model: VehicleModel, fromReconnect: Boolean = false): Boolean {
         linkJob?.cancel()
         linkJob = null
-        reconnectJob?.cancel()
-        reconnectJob = null
-        reconnectAttempt = 0
+        if (!fromReconnect) {
+            reconnectJob?.cancel()
+            reconnectJob = null
+            releaseReconnectWakeLock()
+            reconnectAttempt = 0
+        }
         tearingDown = false
         bridge?.stopKeepalive()
         bridge?.stopNavigation()
@@ -208,12 +286,24 @@ class RideService : android.app.Service() {
             notify("Waiting for scooter ($reason)…")
             Session.onConnection(ConnectionState.DISCONNECTED, model, address)
             if (!alreadyUp && transport.adapter != null) {
-                scheduleReconnect(address, model)
+                scope.launch {
+                    runCatching { transport.disconnect() }
+                    if (!tearingDown) scheduleReconnect(address, model)
+                }
             }
             return false
         }
 
         linkJob = scope.launch {
+            launch {
+                delay(CONNECT_ATTEMPT_TIMEOUT_MS)
+                if (transport.state.value == ConnectionState.CONNECTING ||
+                    transport.state.value == ConnectionState.SCANNING
+                ) {
+                    Log.w(TAG, "GATT setup timed out before service/notification readiness")
+                    runCatching { transport.disconnect() }
+                }
+            }
             launch {
                 Session.hud.collect { hud ->
                     b.onInstruction(
@@ -250,6 +340,11 @@ class RideService : android.app.Service() {
                     Log.d(TAG, "state -> $st")
                     when (st) {
                         ConnectionState.CONNECTED -> {
+                            disconnectFinalizeJob?.cancel()
+                            disconnectFinalizeJob = null
+                            reconnectJob?.cancel()
+                            reconnectJob = null
+                            releaseReconnectWakeLock()
                             reconnectAttempt = 0
                             hadLiveLink = true
                             notify("Connected to ${model.displayName}")
@@ -270,8 +365,14 @@ class RideService : android.app.Service() {
                         }
                         ConnectionState.DISCONNECTED -> {
                             releaseWakeLock()
-                            recordParkedIfPossible()
                             notify("Disconnected")
+                            disconnectFinalizeJob?.cancel()
+                            disconnectFinalizeJob = scope.launch {
+                                delay(RIDE_DISCONNECT_GRACE_MS)
+                                if (Session.finalizePendingRide()) {
+                                    recordParkedIfPossible()
+                                }
+                            }
                             scheduleReconnect(address, model)
                         }
                         else -> Unit
@@ -279,19 +380,100 @@ class RideService : android.app.Service() {
                 }
             }
             launch {
-                var lastAlert: ClusterAlert? = null
-                Session.alert.collect { alert ->
-                    val t = ble ?: return@collect
-                    if (t.state.value != ConnectionState.CONNECTED) {
-                        lastAlert = alert
+                var lastConnectedAlert: ClusterAlert? = null
+                var messageReplayJob: Job? = null
+
+                fun startMessageReplay() {
+                    if (messageReplayJob?.isActive == true) return
+                    messageReplayJob = launch {
+                        while (transport.state.value == ConnectionState.CONNECTED) {
+                            // Coalesce Samsung/WhatsApp notification updates
+                            // before sending. Updates no longer cancel the
+                            // previous message's repeat sequence.
+                            delay(MESSAGE_ALERT_DEBOUNCE_MS)
+                            val next = pendingMessageIfFresh() ?: break
+                            val signature = messageSignature(next)
+                            if (signature == lastSentMessageSignature) {
+                                if (pendingMessageAlert?.let(::messageSignature) == signature) {
+                                    pendingMessageAlert = null
+                                    break
+                                }
+                                // A newer message may have arrived while the
+                                // previous alert was finishing; do not drop it.
+                                continue
+                            }
+
+                            val frames = buildMessageFrames(driver, next)
+                            if (frames.isEmpty()) break
+                            var complete = true
+                            repeat(MESSAGE_ALERT_REPEAT_COUNT) { index ->
+                                for (frame in frames) {
+                                    if (transport.state.value != ConnectionState.CONNECTED ||
+                                        !transport.write(frame)
+                                    ) {
+                                        complete = false
+                                        break
+                                    }
+                                }
+                                if (!complete) return@launch
+                                if (index < MESSAGE_ALERT_REPEAT_COUNT - 1) {
+                                    delay(MESSAGE_ALERT_REPEAT_INTERVAL_MS)
+                                }
+                            }
+
+                            lastSentMessageSignature = signature
+                            if (pendingMessageAlert?.let(::messageSignature) == signature) {
+                                pendingMessageAlert = null
+                            }
+                            Log.i(
+                                TAG,
+                                "cluster message alert replayed " +
+                                    "($MESSAGE_ALERT_REPEAT_COUNT sends, ${frames.size} rows)",
+                            )
+                        }
+                    }
+                }
+
+                // Observe both values together. Keep a pending message while
+                // BLE is disconnected so a short reconnect gap does not lose it.
+                combine(Session.alert, transport.state) { alert, state ->
+                    alert to state
+                }.collect { (alert, state) ->
+                    if (state != ConnectionState.CONNECTED) {
+                        if (alert?.kind == ClusterAlert.Kind.MESSAGE) rememberPendingMessage(alert)
+                        messageReplayJob?.cancel()
+                        messageReplayJob = null
                         return@collect
                     }
-                    if (alert != null) {
-                        sendAlert(driver, t, alert)
-                    } else if (lastAlert?.kind == ClusterAlert.Kind.CALL) {
-                        sendCallEnded(driver, t)
+
+                    if (lastConnectedAlert?.kind == ClusterAlert.Kind.CALL &&
+                        alert?.kind != ClusterAlert.Kind.CALL
+                    ) {
+                        sendCallEnded(driver, transport)
                     }
-                    lastAlert = alert
+
+                    when (alert?.kind) {
+                        ClusterAlert.Kind.CALL -> {
+                            messageReplayJob?.cancel()
+                            messageReplayJob = null
+                            // Session owns any message that arrived during the
+                            // call and will restore it when the call ends.
+                            pendingMessageAlert = null
+                            sendAlert(driver, transport, alert)
+                        }
+                        ClusterAlert.Kind.MESSAGE -> {
+                            rememberPendingMessage(alert)
+                            startMessageReplay()
+                        }
+                        null -> {
+                            if (pendingMessageIfFresh() != null &&
+                                lastConnectedAlert?.kind != ClusterAlert.Kind.CALL
+                            ) {
+                                startMessageReplay()
+                            }
+                        }
+                    }
+                    lastConnectedAlert = alert
                 }
             }
             launch {
@@ -401,6 +583,60 @@ class RideService : android.app.Service() {
         }
     }
 
+    private fun rememberPendingMessage(alert: ClusterAlert) {
+        val signature = messageSignature(alert)
+        if (signature == lastSentMessageSignature) return
+        pendingMessageAlert = alert
+        pendingMessageAtMs = System.currentTimeMillis()
+    }
+
+    private fun pendingMessageIfFresh(): ClusterAlert? {
+        val pending = pendingMessageAlert ?: return null
+        if (System.currentTimeMillis() - pendingMessageAtMs > MAX_PENDING_MESSAGE_AGE_MS) {
+            pendingMessageAlert = null
+            return null
+        }
+        return pending
+    }
+
+    private fun messageSignature(alert: ClusterAlert): String = listOf(
+        alert.key,
+        alert.messageSender.orEmpty(),
+        alert.messageBody.orEmpty(),
+        alert.title,
+        alert.messagePostedAtMs.toString(),
+    ).joinToString("|")
+
+    private fun buildMessageFrames(
+        driver: ProtocolDriver,
+        alert: ClusterAlert,
+    ): List<ByteArray> {
+        if (driver.capabilities.textMessages) {
+            val sender = MessageTextFormatter.senderForCluster(alert.messageSender)
+            val body = alert.messageBody?.trim()?.takeIf { it.isNotBlank() }
+            val frames = mutableListOf<ByteArray>()
+            val senderFrame = sender?.let { driver.buildTextRow(0, it) }
+            if (senderFrame != null) frames += senderFrame
+            val bodyRow = if (senderFrame != null) 1 else 0
+            body?.let { driver.buildTextRow(bodyRow, it) }?.let(frames::add)
+            if (frames.isNotEmpty()) return frames
+        }
+
+        val text = alert.title.take(17)
+        val frame = driver.buildSms(text) ?: PacketBuilder.textRow(OutboundId.SMS, text)
+        return listOf(frame)
+    }
+
+    private fun isGenericCallerLabel(value: String): Boolean =
+        value.trim().lowercase(Locale.ROOT) in setOf(
+            "incoming call",
+            "call",
+            "unknown",
+            "unknown caller",
+            "private number",
+            "unknown number",
+        )
+
     private suspend fun sendAlert(
         driver: ProtocolDriver,
         transport: ScooterBleService,
@@ -408,31 +644,67 @@ class RideService : android.app.Service() {
     ) {
         when (alert.kind) {
             ClusterAlert.Kind.CALL -> {
-                val number = alert.subtitle.substringAfterLast('·').trim().ifBlank { alert.subtitle }
-                val name = alert.title.takeIf { it.isNotBlank() && it != number }
-                val frames = driver.buildCallerFrames(number, null, name)
+                val number = alert.callerNumber.orEmpty()
+                val name = alert.callerName?.takeUnless(::isGenericCallerLabel)
+                if (number.isBlank() && name.isNullOrBlank()) {
+                    val text = alert.title.takeIf { it.isNotBlank() } ?: "Incoming call"
+                    val frame = driver.buildTextRow(0, text)
+                        ?: PacketBuilder.textRow(OutboundId.TEXT_ROW1, text)
+                    if (transport.write(frame)) {
+                        Log.i(TAG, "cluster generic call text written")
+                    } else {
+                        Log.w(TAG, "cluster generic call text write failed")
+                    }
+                    return
+                }
+
+                val frames = driver.buildCallerFrames(number, alert.callerCountryCode, name)
                 if (frames.isNotEmpty()) {
-                    Log.i(TAG, "cluster call alert: '$name' '$number' (${frames.size} frames)")
-                    frames.forEach { transport.write(it) }
+                    var written = 0
+                    for (frame in frames) {
+                        if (transport.write(frame)) written++
+                    }
+                    if (written == frames.size) {
+                        Log.i(TAG, "cluster call alert written ($written caller frames; details redacted)")
+                    } else {
+                        Log.w(TAG, "cluster call alert write incomplete ($written/${frames.size} frames)")
+                    }
                 } else {
-                    val text = if (name != null) "$name $number" else number.ifBlank { alert.title }
-                    transport.write(PacketBuilder.textRow(OutboundId.CALLER, text))
+                    val text = listOfNotNull(
+                        name?.takeIf { it.isNotBlank() },
+                        number.takeIf { it.isNotBlank() },
+                    ).joinToString(" ").ifBlank { alert.title }
+                    val frame = driver.buildTextRow(0, text)
+                        ?: PacketBuilder.textRow(OutboundId.TEXT_ROW1, text)
+                    if (transport.write(frame)) {
+                        Log.i(TAG, "cluster generic call text written")
+                    } else {
+                        Log.w(TAG, "cluster generic call text write failed")
+                    }
                 }
             }
             ClusterAlert.Kind.MESSAGE -> {
-                val text = alert.title.take(17)
-                Log.i(TAG, "cluster message alert: '$text'")
-                val frame = driver.buildSms(text) ?: PacketBuilder.textRow(OutboundId.SMS, text)
-                transport.write(frame)
+                val frames = buildMessageFrames(driver, alert)
+                for (frame in frames) transport.write(frame)
+                Log.i(TAG, "cluster message alert sent (${frames.size} text rows)")
             }
         }
     }
 
     private suspend fun sendCallEnded(driver: ProtocolDriver, transport: ScooterBleService) {
-        val frame = driver.buildCallerInfo("", null, Command.CALL_IDLE)
-        if (frame != null) {
-            Log.i(TAG, "cluster call alert cleared")
-            transport.write(frame)
+        val frames = driver.buildCallEndedFrames()
+        if (frames.isEmpty()) {
+            Log.d(TAG, "driver has no caller-clear frame")
+            return
+        }
+        var written = 0
+        for (frame in frames) {
+            if (transport.write(frame)) written++
+        }
+        if (written == frames.size) {
+            Log.i(TAG, "cluster call alert cleared ($written caller-clear frames)")
+        } else {
+            Log.w(TAG, "cluster call clear incomplete ($written/${frames.size} frames)")
         }
     }
 
@@ -494,23 +766,71 @@ class RideService : android.app.Service() {
 
     private fun scheduleReconnect(address: String, model: VehicleModel) {
         if (tearingDown) return
+        val currentState = ble?.state?.value
+        if (currentState == ConnectionState.CONNECTED ||
+            currentState == ConnectionState.CONNECTING ||
+            currentState == ConnectionState.SCANNING
+        ) return
         if (reconnectJob?.isActive == true) return
+
         val attempt = reconnectAttempt
-        reconnectAttempt++
         val wait = when {
             attempt < RECONNECT_DELAYS_MS.size -> RECONNECT_DELAYS_MS[attempt]
             attempt < 34 -> 60_000L
             else -> 180_000L
         }
-        Log.i(TAG, "unexpected drop; reconnect #${attempt + 1} in ${wait}ms")
+        reconnectAttempt = attempt + 1
+
+        // Protect the initial 5/10/20-second retries from Doze deferring their
+        // coroutine timers. Keep this deliberately bounded; after three
+        // attempts, Companion Device presence is the background wake-up path.
+        val protectRetry = attempt < SHORT_RECONNECT_WAKE_LOCK_ATTEMPTS
+        if (protectRetry) {
+            holdReconnectWakeLock(wait + CONNECT_ATTEMPT_TIMEOUT_MS + 5_000L)
+        }
+        Log.i(
+            TAG,
+            "reconnect #${attempt + 1} scheduled in ${wait}ms" +
+                if (protectRetry) " (bounded wake lock)" else "",
+        )
+
         reconnectJob = scope.launch {
-            delay(wait)
-            if (ble?.state?.value == ConnectionState.CONNECTED) return@launch
-            val attemptBefore = reconnectAttempt
-            connect(address, model)
-            if (ble?.state?.value != ConnectionState.CONNECTED) {
-                reconnectAttempt = attemptBefore
-                if (!tearingDown) scheduleReconnect(address, model)
+            var retryAgain = false
+            try {
+                delay(wait)
+                if (tearingDown) return@launch
+                val active = ble?.state?.value
+                if (active == ConnectionState.CONNECTED ||
+                    active == ConnectionState.CONNECTING ||
+                    active == ConnectionState.SCANNING
+                ) return@launch
+
+                val started = connect(address, model, fromReconnect = true)
+                if (!started) {
+                    Log.w(TAG, "reconnect attempt #${attempt + 1} could not start")
+                    retryAgain = true
+                    return@launch
+                }
+
+                val transport = ble
+                val terminal = if (transport == null) null else withTimeoutOrNull(CONNECT_ATTEMPT_TIMEOUT_MS) {
+                    transport.state.first {
+                        it == ConnectionState.CONNECTED || it == ConnectionState.DISCONNECTED
+                    }
+                }
+                if (terminal != ConnectionState.CONNECTED) {
+                    Log.w(TAG, "reconnect attempt #${attempt + 1} timed out or disconnected")
+                    runCatching { transport?.disconnect() }
+                    retryAgain = true
+                } else {
+                    Log.i(TAG, "reconnect attempt #${attempt + 1} connected")
+                }
+            } finally {
+                releaseReconnectWakeLock()
+                if (retryAgain && !tearingDown) {
+                    reconnectJob = null
+                    scheduleReconnect(address, model)
+                }
             }
         }
     }
@@ -519,6 +839,14 @@ class RideService : android.app.Service() {
         tearingDown = true
         reconnectJob?.cancel()
         reconnectJob = null
+        releaseReconnectWakeLock()
+        disconnectFinalizeJob?.cancel()
+        disconnectFinalizeJob = null
+        callFallbackJob?.cancel()
+        callFallbackJob = null
+        telephonyCallMonitor?.stop()
+        telephonyCallMonitor = null
+        Session.clearActiveCall()
         recordParkedIfPossible()
         linkJob?.cancel()
         linkJob = null
@@ -580,6 +908,14 @@ class RideService : android.app.Service() {
 
     companion object {
         private const val TAG = "RideService"
+        private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
+        private const val CONNECT_ATTEMPT_TIMEOUT_MS = 20_000L
+        private const val SHORT_RECONNECT_WAKE_LOCK_ATTEMPTS = 3
+        private const val MESSAGE_ALERT_REPEAT_COUNT = 3
+        private const val MESSAGE_ALERT_REPEAT_INTERVAL_MS = 1_500L
+        private const val MESSAGE_ALERT_DEBOUNCE_MS = 250L
+        private const val MAX_PENDING_MESSAGE_AGE_MS = 120_000L
+        private const val CALL_NOTIFICATION_GRACE_MS = 1_200L
         const val CHANNEL = "ride"
         const val NOTIF_ID = 1
         const val ACTION_CONNECT = "dev.tvsopen.CONNECT"

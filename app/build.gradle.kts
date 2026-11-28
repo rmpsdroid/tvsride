@@ -17,8 +17,8 @@ val hasReleaseKey = keyProps.getProperty("storeFile")
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 val ciShortSha = System.getenv("GITHUB_SHA")?.take(7)
-val baseVersionName = "0.2.7"
-val computedVersionCode = ciRunNumber ?: 10
+val baseVersionName = "0.2.9"
+val computedVersionCode = ciRunNumber ?: 12
 val computedVersionName = when {
     ciRunNumber != null && !ciShortSha.isNullOrBlank() -> "$baseVersionName-r$ciRunNumber.$ciShortSha"
     ciRunNumber != null -> "$baseVersionName-r$ciRunNumber"
@@ -82,6 +82,7 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("com.googlecode.libphonenumber:libphonenumber:8.13.55")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.activity:activity-ktx:1.9.2")

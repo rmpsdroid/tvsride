@@ -259,6 +259,9 @@ class JupiterDriver(
         name: String?,
     ): List<ByteArray> = ClusterFrames.callerFrames(number, countryCode, name)
 
+    override fun buildCallEndedFrames(): List<ByteArray> =
+        ClusterFrames.callerFrames("", "", null)
+
     override fun buildPictogram(name: String): ByteArray? = ClusterFrames.pictogram(name)
 
     override fun buildMediaMeta(dataId: Int, text: String): ByteArray? =
@@ -285,7 +288,12 @@ class JupiterDriver(
 
     override fun buildUserId(id: Long): ByteArray? = ClusterFrames.userId(id)
 
-    override fun buildSms(text: String): ByteArray? = ClusterFrames.sms(text)
+    /**
+     * Jupiter notifications use the documented 0x4C/0x63 text rows.
+     * 0x53 is model-gated to U388/iQube upstream and remains unverified here.
+     */
+    override fun buildSms(text: String): ByteArray? =
+        PacketBuilder.textRow(OutboundId.TEXT_ROW1, text)
 
     override fun buildPlayPauseState(stateByte: Int): ByteArray? =
         ClusterFrames.playPauseState(stateByte)

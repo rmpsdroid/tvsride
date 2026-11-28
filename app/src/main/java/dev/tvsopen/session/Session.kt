@@ -10,6 +10,7 @@ import dev.tvsopen.transport.ConnectionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 data class Telemetry(
     val speedKmh: Int? = null,            // SM1 idx 2
@@ -67,6 +68,12 @@ data class ClusterAlert(
     val title: String,
     val subtitle: String = "",
     val key: String = "",
+    val callerNumber: String? = null,
+    val callerCountryCode: String? = null,
+    val callerName: String? = null,
+    val messageSender: String? = null,
+    val messageBody: String? = null,
+    val messagePostedAtMs: Long = 0L,
 ) {
     enum class Kind { CALL, MESSAGE }
 }
@@ -93,6 +100,9 @@ object Session {
 
     private val _alert = MutableStateFlow<ClusterAlert?>(null)
     val alert: StateFlow<ClusterAlert?> = _alert.asStateFlow()
+
+    private val _simCallActive = MutableStateFlow(false)
+    private val _pendingMessage = MutableStateFlow<ClusterAlert?>(null)
 
     private val _connection = MutableStateFlow(ConnectionState1())
     val connection: StateFlow<ConnectionState1> = _connection.asStateFlow()
@@ -169,20 +179,34 @@ object Session {
         val now = System.currentTimeMillis()
 
         if (isConnected && !wasConnected) {
-            val isBriefReconnect = lastDisconnectAt > 0L && (now - lastDisconnectAt) < 15_000L
-            if (!isBriefReconnect) {
-                _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
-                rideLog?.start()
+            val isBriefReconnect = lastDisconnectAt > 0L &&
+                now - lastDisconnectAt < RIDE_DISCONNECT_GRACE_MS
+            if (!isBriefReconnect && lastDisconnectAt > 0L) {
+                rideLog?.finish(lastDisconnectAt)
                 syncRideFlows()
+                _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
             }
+            lastDisconnectAt = 0L
+            android.util.Log.i("Session", "link restored (brief=$isBriefReconnect)")
         }
         if (!isConnected && wasConnected) {
             lastDisconnectAt = now
-            rideLog?.finish()
-            syncRideFlows()
+            android.util.Log.i("Session", "link lost; ride finalization pending")
         }
-
         _connection.value = ConnectionState1(state, model, address)
+    }
+
+    @Synchronized
+    fun finalizePendingRide(now: Long = System.currentTimeMillis()): Boolean {
+        val disconnectedAt = lastDisconnectAt
+        if (disconnectedAt <= 0L || now - disconnectedAt < RIDE_DISCONNECT_GRACE_MS) return false
+        if (_connection.value.state == ConnectionState.CONNECTED) return false
+        rideLog?.finish(disconnectedAt)
+        _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
+        lastDisconnectAt = 0L
+        syncRideFlows()
+        android.util.Log.i("Session", "pending ride finalized after BLE grace period")
+        return true
     }
 
     fun onFrame(frame: DecodedFrame) {
@@ -199,17 +223,13 @@ object Session {
                 val speed = frame.field(Field.SPEED)?.toInt() ?: cur.speedKmh
                 val sw = frame.field(Field.SWITCH_STATUS)?.toInt() ?: 0
                 val odo = scaled(Field.ODOMETER, 10.0) ?: cur.odometerKm
-                if (sw == 0x40) {
-                    rideLog?.finish()
-                    syncRideFlows()
-                } else if (((speed ?: 0) > 0 || sw == 0x80) && _rides.value.none { it.inProgress }) {
-                    _telemetry.value = cur.copy(odometerAtConnectKm = odo)
-                    rideLog?.start()
-                    syncRideFlows()
+                val movingOrIgnitionOn = (speed ?: 0) > 0 || sw == 0x80
+                val hasOpenRide = _rides.value.any { it.inProgress }
+                val baselineOdo = when {
+                    sw == 0x40 -> cur.odometerAtConnectKm ?: odo
+                    movingOrIgnitionOn && !hasOpenRide -> odo
+                    else -> cur.odometerAtConnectKm ?: odo
                 }
-                val baselineOdo = _telemetry.value.odometerAtConnectKm
-                    ?: cur.odometerAtConnectKm
-                    ?: odo
                 val updated = cur.copy(
                     speedKmh = speed,
                     odometerKm = odo,
@@ -229,7 +249,19 @@ object Session {
                     lastFrameAt = now,
                 )
                 _telemetry.value = updated
+                // Start from the first fresh moving/ignition frame, not GATT connect.
+                if (movingOrIgnitionOn && !hasOpenRide) {
+                    rideLog?.start(now)
+                    syncRideFlows()
+                    _telemetry.value = updated.copy(odometerAtConnectKm = odo)
+                }
+                // Capture the final odometer before an ignition-off finish.
                 trackRideDistance()
+                if (sw == 0x40) {
+                    rideLog?.finish(now)
+                    syncRideFlows()
+                    _telemetry.value = _telemetry.value.copy(odometerAtConnectKm = null)
+                }
                 updated
             }
 
@@ -265,15 +297,60 @@ object Session {
         }
     }
 
-    fun onHud(update: (HudState) -> HudState) {
-        _hud.value = update(_hud.value)
+    fun onHud(transform: (HudState) -> HudState) {
+        _hud.update(transform)
     }
 
     fun onAlert(alert: ClusterAlert?) {
+        when (alert?.kind) {
+            ClusterAlert.Kind.MESSAGE -> {
+                // Never let a message notification replace an active call.
+                // Keep the newest message and surface it after the call ends.
+                if (_alert.value?.kind == ClusterAlert.Kind.CALL) {
+                    _pendingMessage.value = alert
+                    return
+                }
+            }
+            ClusterAlert.Kind.CALL -> {
+                // A call takes priority over a message already on screen.
+                _alert.value?.takeIf { it.kind == ClusterAlert.Kind.MESSAGE }?.let {
+                    _pendingMessage.value = it
+                }
+            }
+            null -> Unit
+        }
         _alert.value = alert
     }
 
-    fun clearAlert(key: String) {
-        if (_alert.value?.key == key) _alert.value = null
+    fun setSimCallActive(active: Boolean) {
+        _simCallActive.value = active
     }
+
+    fun clearAlert(key: String) {
+        if (_pendingMessage.value?.key == key) _pendingMessage.value = null
+
+        val current = _alert.value ?: return
+        if (current.key != key) return
+        // Samsung removes/reposts its in-call notification when a call is
+        // answered. The SIM state, not that notification lifecycle, owns the
+        // lifetime of a mirrored cellular call.
+        if (current.kind == ClusterAlert.Kind.CALL && _simCallActive.value) return
+
+        if (current.kind == ClusterAlert.Kind.CALL) {
+            _alert.value = _pendingMessage.value
+            _pendingMessage.value = null
+        } else {
+            _alert.value = null
+        }
+    }
+
+    fun clearActiveCall() {
+        _simCallActive.value = false
+        if (_alert.value?.kind == ClusterAlert.Kind.CALL) {
+            _alert.value = _pendingMessage.value
+        }
+        _pendingMessage.value = null
+    }
+
+    private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
 }
