@@ -261,33 +261,41 @@ fun MoreScreen(
                     }
 
                     SettingsCategory.NAVIGATION -> {
-                        val ctx = LocalContext.current
-                        val prefs = remember { RidePrefs.load(ctx) }
-                        var extras by remember { mutableStateOf(prefs.extraMapsPackages) }
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            SettingsToggleCard(
+                        if (!capabilities.navigationHud) {
+                            UnsupportedFeatureCard(
                                 "Navigation mirroring",
-                                "Send turn-by-turn instructions from supported map apps to your scooter display.",
-                                navMirroring,
-                                onNavMirrorChange,
+                                connection.model.displayName,
+                                "The selected scooter driver does not currently provide a navigation control and text channel.",
                             )
-                            NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
-                            ExtraPackageCard(
-                                "Extra maps apps",
-                                "Add map apps that are not detected automatically.",
-                                extras,
-                                listOf("map", "nav", "waze", "osm", "here", "tomtom", "route"),
-                                onAdd = {
-                                    val updated = extras + it
-                                    extras = updated
-                                    prefs.extraMapsPackages = updated
-                                },
-                                onRemove = {
-                                    val updated = extras - it
-                                    extras = updated
-                                    prefs.extraMapsPackages = updated
-                                },
-                            )
+                        } else {
+                            val ctx = LocalContext.current
+                            val prefs = remember { RidePrefs.load(ctx) }
+                            var extras by remember { mutableStateOf(prefs.extraMapsPackages) }
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                SettingsToggleCard(
+                                    "Navigation mirroring",
+                                    "Send turn-by-turn instructions from supported map apps to your scooter display.",
+                                    navMirroring,
+                                    onNavMirrorChange,
+                                )
+                                NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
+                                ExtraPackageCard(
+                                    "Extra maps apps",
+                                    "Add map apps that are not detected automatically.",
+                                    extras,
+                                    listOf("map", "nav", "waze", "osm", "here", "tomtom", "route"),
+                                    onAdd = {
+                                        val updated = extras + it
+                                        extras = updated
+                                        prefs.extraMapsPackages = updated
+                                    },
+                                    onRemove = {
+                                        val updated = extras - it
+                                        extras = updated
+                                        prefs.extraMapsPackages = updated
+                                    },
+                                )
+                            }
                         }
                     }
 
