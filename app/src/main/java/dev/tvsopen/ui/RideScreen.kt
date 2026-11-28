@@ -54,6 +54,7 @@ import dev.tvsopen.session.ConnectionState1
 import dev.tvsopen.session.HudState
 import dev.tvsopen.session.ParkedInfo
 import dev.tvsopen.session.Telemetry
+import dev.tvsopen.protocol.DriverRegistry
 import dev.tvsopen.transport.ConnectionState
 import dev.tvsopen.transport.label
 import dev.tvsopen.ui.theme.AppSwitch
@@ -83,6 +84,9 @@ fun RideScreen(
 ) {
     val context = LocalContext.current
     val connected = connection.state == ConnectionState.CONNECTED
+    val capabilities = remember(connection.model) {
+        DriverRegistry.forModel(connection.model).capabilities
+    }
     var showAllData by rememberSaveable { mutableStateOf(false) }
     var tick by remember { mutableStateOf(0L) }
 
@@ -143,184 +147,209 @@ fun RideScreen(
             onConnect = onConnect,
         )
 
-        Spacer(Modifier.height(14.dp))
-        Surface(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
-                Text(
-                    "CURRENT SPEED",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
-                )
-                Row(verticalAlignment = Alignment.Bottom) {
+        if (capabilities.telemetry) {
+            Spacer(Modifier.height(14.dp))
+            Surface(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
                     Text(
-                        displayTelemetry.speedKmh?.toString() ?: "—",
-                        style = NumberStyle.copy(fontSize = 58.sp, lineHeight = 62.sp),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        "CURRENT SPEED",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(
+                            displayTelemetry.speedKmh?.toString() ?: "—",
+                            style = NumberStyle.copy(fontSize = 58.sp, lineHeight = 62.sp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "km/h",
+                            Modifier.padding(bottom = 9.dp),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
                     Text(
-                        "km/h",
-                        Modifier.padding(bottom = 9.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        if (freshTelemetry) "Latest reading from your cluster"
+                        else "Waiting for a fresh reading",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
                     )
                 }
-                Text(
-                    if (freshTelemetry) "Latest reading from your cluster"
-                    else "Waiting for a fresh reading",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
+            }
+    
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                VehicleMetric(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Filled.LocalGasStation,
+                    label = "Fuel",
+                    value = displayTelemetry.fuelBars?.let { "$it / ${Telemetry.FUEL_BAR_MAX}" } ?: "—",
+                    unit = "bars",
                 )
+                VehicleMetric(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Filled.Speed,
+                    label = "Engine",
+                    value = displayTelemetry.engineRpm?.toString() ?: "—",
+                    unit = "rpm",
+                )
+                VehicleMetric(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Filled.Place,
+                    label = "Range",
+                    value = displayTelemetry.distanceToEmptyKm?.toString() ?: "—",
+                    unit = "km",
+                )
+            }
+        } else {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Vehicle data not available yet", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        connection.model.displayName + " does not have a decoded telemetry profile in this build.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            VehicleMetric(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Filled.LocalGasStation,
-                label = "Fuel",
-                value = displayTelemetry.fuelBars?.let { "$it / ${Telemetry.FUEL_BAR_MAX}" } ?: "—",
-                unit = "bars",
-            )
-            VehicleMetric(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Filled.Speed,
-                label = "Engine",
-                value = displayTelemetry.engineRpm?.toString() ?: "—",
-                unit = "rpm",
-            )
-            VehicleMetric(
-                modifier = Modifier.weight(1f),
-                icon = Icons.Filled.Place,
-                label = "Range",
-                value = displayTelemetry.distanceToEmptyKm?.toString() ?: "—",
-                unit = "km",
-            )
-        }
-
-        if (hud.active) {
+        if (hud.active && capabilities.navigationHud) {
             Spacer(Modifier.height(18.dp))
             SectionHeading("Navigation")
             NavigationStatusCard(hud)
         }
 
-        Spacer(Modifier.height(20.dp))
-        SectionHeading("Quick controls")
-        ToggleActionCard(
-            icon = Icons.Filled.Navigation,
-            title = "Navigation mirroring",
-            subtitle = when {
-                !navMirroring -> "Turn-by-turn instructions are off"
-                hud.active -> "Showing directions from ${hud.provider ?: "your maps app"}"
-                else -> "On · waiting for a navigation step"
-            },
-            checked = navMirroring,
-            onCheckedChange = onNavMirrorChange,
-        )
-        Spacer(Modifier.height(10.dp))
-        ToggleActionCard(
-            icon = Icons.Filled.NotificationsActive,
-            title = "Find My Scooter",
-            subtitle = "Flash the lights and sound the horn",
-            checked = findMyEnabled,
-            onCheckedChange = onFindMyChange,
-        )
-        Spacer(Modifier.height(10.dp))
-        ToggleActionCard(
-            icon = Icons.Filled.Bluetooth,
-            title = "Keep Ride Mode active",
-            subtitle = if (rideMode) "Resume is enabled after a reboot" else "Resume is currently off",
-            checked = rideMode,
-            onCheckedChange = onRideModeChange,
-        )
+        val hasQuickControls = capabilities.navigationHud ||
+            capabilities.findMyScooter || capabilities.keepalive
+        if (hasQuickControls) {
+            Spacer(Modifier.height(20.dp))
+            SectionHeading("Quick controls")
+            if (capabilities.navigationHud) {
+                ToggleActionCard(
+                    icon = Icons.Filled.Navigation,
+                    title = "Navigation mirroring",
+                    subtitle = when {
+                        !navMirroring -> "Turn-by-turn instructions are off"
+                        hud.active -> "Showing directions from " + (hud.provider ?: "your maps app")
+                        else -> "On · waiting for a navigation step"
+                    },
+                    checked = navMirroring,
+                    onCheckedChange = onNavMirrorChange,
+                )
+            }
+            if (capabilities.findMyScooter) {
+                if (capabilities.navigationHud) Spacer(Modifier.height(10.dp))
+                ToggleActionCard(
+                    icon = Icons.Filled.NotificationsActive,
+                    title = "Find My Scooter",
+                    subtitle = "Flash the lights and sound the horn",
+                    checked = findMyEnabled,
+                    onCheckedChange = onFindMyChange,
+                )
+            }
+            if (capabilities.keepalive) {
+                Spacer(Modifier.height(10.dp))
+                ToggleActionCard(
+                    icon = Icons.Filled.Bluetooth,
+                    title = "Keep Ride Mode active",
+                    subtitle = if (rideMode) "Resume is enabled after a reboot" else "Resume is currently off",
+                    checked = rideMode,
+                    onCheckedChange = onRideModeChange,
+                )
+            }
+        }
         Spacer(Modifier.height(10.dp))
         LastParkedAction(parked) {
             if (!openParkedLocation(context, parked)) onOpenParked()
         }
 
-        Spacer(Modifier.height(20.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SectionHeading("Vehicle information", Modifier.weight(1f))
-            TextButton(onClick = { showAllData = !showAllData }) {
-                Text(if (showAllData) "Show less" else "Show all")
+        if (capabilities.telemetry) {
+            Spacer(Modifier.height(20.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionHeading("Vehicle information", Modifier.weight(1f))
+                TextButton(onClick = { showAllData = !showAllData }) {
+                    Text(if (showAllData) "Show less" else "Show all")
+                }
             }
-        }
-        if (showAllData) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Speed, "Top speed",
-                    displayTelemetry.topSpeedKmh?.toString() ?: "—", "km/h",
-                )
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Place, "Odometer",
-                    displayTelemetry.odometerKm?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "—",
-                    "km",
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Route, "This connection",
-                    displayTelemetry.connectedDistanceKm()?.let {
-                        String.format(java.util.Locale.US, "%.1f", it)
-                    } ?: "—", "km",
-                )
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.BatteryChargingFull, "Battery",
-                    displayTelemetry.batteryVoltage?.let { String.format(java.util.Locale.US, "%.1f", it / 10.0) }
-                        ?: "—", "V",
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Thermostat, "Coolant",
-                    displayTelemetry.engineTempC?.toString() ?: "—", "°C",
-                )
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Speed, "Average economy",
-                    displayTelemetry.avgEconomyKmpl?.toString() ?: "—", "km/l",
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Build, "Service",
-                    when (displayTelemetry.serviceDue) {
-                        true -> "Due"
-                        false -> "OK"
-                        null -> "—"
-                    }, "",
-                )
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Warning, "Check engine",
-                    when (displayTelemetry.milOn) {
-                        true -> displayTelemetry.milBlinkCode?.takeIf { it > 0 }?.let { "On ($it)" } ?: "On"
-                        false -> "Off"
-                        null -> "—"
-                    }, "",
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Speed, "Instant economy",
-                    displayTelemetry.instantEconomyKmpl?.toString() ?: "—", "km/l",
-                )
-                VehicleMetric(
-                    Modifier.weight(1f), Icons.Filled.Build, "Firmware",
-                    displayTelemetry.softwareVersion ?: "—", "",
-                )
+            if (showAllData) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Speed, "Top speed",
+                        displayTelemetry.topSpeedKmh?.toString() ?: "—", "km/h",
+                    )
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Place, "Odometer",
+                        displayTelemetry.odometerKm?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "—",
+                        "km",
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Route, "This connection",
+                        displayTelemetry.connectedDistanceKm()?.let {
+                            String.format(java.util.Locale.US, "%.1f", it)
+                        } ?: "—", "km",
+                    )
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.BatteryChargingFull, "Battery",
+                        displayTelemetry.batteryVoltage?.let { String.format(java.util.Locale.US, "%.1f", it / 10.0) }
+                            ?: "—", "V",
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Thermostat, "Coolant",
+                        displayTelemetry.engineTempC?.toString() ?: "—", "°C",
+                    )
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Speed, "Average economy",
+                        displayTelemetry.avgEconomyKmpl?.toString() ?: "—", "km/l",
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Build, "Service",
+                        when (displayTelemetry.serviceDue) {
+                            true -> "Due"
+                            false -> "OK"
+                            null -> "—"
+                        }, "",
+                    )
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Warning, "Check engine",
+                        when (displayTelemetry.milOn) {
+                            true -> displayTelemetry.milBlinkCode?.takeIf { it > 0 }?.let { "On ($it)" } ?: "On"
+                            false -> "Off"
+                            null -> "—"
+                        }, "",
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Speed, "Instant economy",
+                        displayTelemetry.instantEconomyKmpl?.toString() ?: "—", "km/l",
+                    )
+                    VehicleMetric(
+                        Modifier.weight(1f), Icons.Filled.Build, "Firmware",
+                        displayTelemetry.softwareVersion ?: "—", "",
+                    )
+                }
             }
         }
 
