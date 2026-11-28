@@ -102,6 +102,13 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <!-- Companion Device Manager association is required for presence-based
+         auto-connect. Optional so devices without this capability can still
+         install and use manual BLE connection. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
