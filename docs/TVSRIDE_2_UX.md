@@ -221,10 +221,20 @@ Implemented in the current design branch:
 - Moved live logs behind Settings → Advanced & Diagnostics.
 - Retained the existing Bluetooth actions, navigation mirroring, Find My, ride-resume toggle and cluster controls.
 
+### Milestone 2 — Settings categories and connection-state clarity
+
+Implemented on this branch:
+- Replaced the long Settings scroll with a searchable category index and dedicated category pages.
+- Organized scooter management, connection, navigation, calls & messages, cluster display, ride preferences, appearance, data & privacy, advanced diagnostics and About.
+- Preserved the existing preference keys, package-picker flows, cluster controls, export action and diagnostics entry.
+- Added direct notification-access guidance and made clear that notification access is optional for basic Bluetooth telemetry.
+- Exposed Navigation mirroring and Keep Ride Mode active in Settings while retaining their Ride-screen quick controls.
+- Corrected the Ride connection card so Connecting, Connected, Reconnecting and Disconnected are described consistently with the status pill.
+
 ### Remaining work
 
-- Split the long Settings page into dedicated task-based category screens.
-- Add Settings search and clearer permission status / recovery guidance.
-- Review visual hierarchy and spacing against screenshots on the target phone.
-- Run CI unit tests and Android debug build, then review the resulting APK.
-- Test the new navigation and connection states without scooter hardware; do not treat simulator output as hardware verification.
+- Run CI unit tests and Android debug build for this milestone, then review the new APK.
+- Review the category index and each Settings page on the target phone for readability and navigation.
+- Test Bluetooth scanning, connection, telemetry freshness, reconnect and vehicle commands with the actual Jupiter 110.
+- Continue with model-aware capability visibility and the fuller Diagnostics lifecycle/permission summary.
+- Complete daylight, dark-mode and real-ride checks; screenshots without scooter hardware are not hardware verification.
