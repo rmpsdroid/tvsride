@@ -143,6 +143,12 @@ fun MoreScreen(
 
         item { AppearanceCard() }
 
+        item {
+            Text("CLUSTER DISPLAY", style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
         item { RiderNameCard(name = riderName, onNameChange = onRiderNameChange) }
 
         item {
@@ -185,7 +191,7 @@ fun MoreScreen(
         }
 
         item {
-            Text("CONNECTION", style = MaterialTheme.typography.labelMedium,
+            Text("MY SCOOTER", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -212,7 +218,7 @@ fun MoreScreen(
         }
 
         item {
-            Text("PERMISSIONS", style = MaterialTheme.typography.labelMedium,
+            Text("NOTIFICATION ACCESS", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -254,7 +260,7 @@ fun MoreScreen(
         }
 
         item {
-            Text("TESTING", style = MaterialTheme.typography.labelMedium,
+            Text("APP BEHAVIOUR", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -262,7 +268,7 @@ fun MoreScreen(
         item { KeepScreenOnCard(enabled = keepScreenOn, onChange = onKeepScreenOnChange) }
 
         item {
-            Text("ALERTS", style = MaterialTheme.typography.labelMedium,
+            Text("CALLS & MESSAGES", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -444,7 +450,7 @@ fun MoreScreen(
         }
 
         item {
-            Text("PROTOCOL TRANSPARENCY", style = MaterialTheme.typography.labelMedium,
+            Text("CAPABILITIES & PROTOCOL", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
