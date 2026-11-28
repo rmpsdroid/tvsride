@@ -54,7 +54,7 @@ import dev.tvsopen.ui.theme.TVSRideTheme
 import java.util.Locale
 
 /**
- * Single-activity host: bottom navigation between Home and More.
+ * Single-activity host: bottom navigation between Ride, Trips and Settings.
  *
  * Deliberately thin. The protocol layer is the substance; the UI observes state
  * and sends intents to [RideService]. There is no account, no repository and no
