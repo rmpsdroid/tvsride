@@ -336,6 +336,8 @@ class NtorqDriver(
      * working reference for Ntorq exists.
      */
     override val capabilities = Capabilities(
+        telemetry = true,
+        riderName = true,
         findMyScooter = true,
         navigationHud = true,
         textMessages = false,
@@ -344,7 +346,7 @@ class NtorqDriver(
         buttonGestures = false,
         timeSync = true,
         wifiPassword = true,
-        calibration = true,
+        calibration = false,
         // Stock Ntorq is the one family that wires the 0x6B media map
         // (`BluetoothUtil.processMusicControlsUseBtData`); Jupiter's parse path
         // only logs it. Replaying those keys is therefore Ntorq-safe.

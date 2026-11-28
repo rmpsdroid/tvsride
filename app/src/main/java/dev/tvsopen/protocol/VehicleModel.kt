@@ -98,6 +98,10 @@ enum class VehicleModel(
  * sending packets the cluster may reject.
  */
 data class Capabilities(
+    /** The selected driver decodes model-specific live vehicle telemetry. */
+    val telemetry: Boolean = false,
+    /** The cluster implements the rider-name greeting frame. */
+    val riderName: Boolean = false,
     val findMyScooter: Boolean = true,
     val navigationHud: Boolean = false,
     val textMessages: Boolean = false,

@@ -208,6 +208,7 @@ class GenericDriver(
         findMyScooter = false,
         navigationHud = false,
         textMessages = false,
+        keepalive = false,
     )
 
     override fun confidence() = mapOf(

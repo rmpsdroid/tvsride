@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +20,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Science
@@ -29,6 +41,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,22 +61,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.tvsopen.Nucleus
 import dev.tvsopen.data.DataExport
 import dev.tvsopen.prefs.RidePrefs
 import dev.tvsopen.protocol.ClusterFrames
 import dev.tvsopen.protocol.Confidence
+import dev.tvsopen.protocol.DriverRegistry
 import dev.tvsopen.protocol.Pictograms
-import dev.tvsopen.session.Ride
-import dev.tvsopen.session.Session
 import dev.tvsopen.transport.ConnectionState
 import dev.tvsopen.transport.label
 import dev.tvsopen.ui.theme.ThemeMode
 import dev.tvsopen.ui.theme.ThemePrefs
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -82,477 +90,662 @@ fun MoreScreen(
     onOpenNotificationAccess: () -> Unit,
     onScan: () -> Unit,
     onDisconnect: () -> Unit,
+    navMirroring: Boolean,
+    onNavMirrorChange: (Boolean) -> Unit,
+    rideMode: Boolean,
+    onRideModeChange: (Boolean) -> Unit,
     onSetBrightness: (Int) -> Unit = {},
     onSetCalibration: (command: Int, seconds: Int) -> Unit = { _, _ -> },
+    onOpenDiagnostics: () -> Unit = {},
 ) {
+    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val categories = SettingsCategory.values().toList()
+    val capabilities = remember(connection.model) {
+        DriverRegistry.forModel(connection.model).capabilities
+    }
+    val filteredCategories = remember(searchQuery) {
+        val queryTerms = searchQuery.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (queryTerms.isEmpty()) categories
+        else categories.filter { category ->
+            val searchable = "${category.title} ${category.description} ${category.searchTerms}".lowercase()
+            queryTerms.all { term -> searchable.contains(term) }
+        }
+    }
+    val selected = categories.firstOrNull { it.name == selectedCategory }
+    BackHandler(enabled = selected != null) { selectedCategory = null }
+
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            Text("KEEP THE CONNECTION ALIVE", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item { DozeCard() }
-
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text(
-                                "Auto-connect near vehicle",
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                "Android 12+: connect when your associated scooter becomes " +
-                                    "reachable, even if the app is closed.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AppSwitch(
-                            checked = autoConnect,
-                            onCheckedChange = onAutoConnectChange,
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            Text("APPEARANCE", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item { AppearanceCard() }
-
-        item { RiderNameCard(name = riderName, onNameChange = onRiderNameChange) }
-
-        item {
-            ClusterControlsCard(
-                connected = connection.state == ConnectionState.CONNECTED,
-                onSetBrightness = onSetBrightness,
-                onSetCalibration = onSetCalibration,
-            )
-        }
-
-        item {
-            Text("RIDES", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            val rides by Session.rides.collectAsStateWithLifecycle()
-            val totalRides by Session.totalRides.collectAsStateWithLifecycle()
-            val totalDistanceKm by Session.totalRideDistanceKm.collectAsStateWithLifecycle()
-            RidesCard(rides = rides, totalRides = totalRides, totalDistanceKm = totalDistanceKm)
-        }
-
-        item {
-            Text("YOUR DATA", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            val ctx = LocalContext.current
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (selected == null) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Settings", style = MaterialTheme.typography.headlineLarge)
                     Text(
-                        "Export rides, settings and the last parked spot as JSON. " +
-                            "Everything stays on your device unless you share it.",
-                        style = MaterialTheme.typography.bodySmall,
+                        "Make TVSRide work the way you ride",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    OutlinedButton(onClick = {
-                        val json = DataExport.buildJson(ctx)
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "application/json"
-                            putExtra(Intent.EXTRA_SUBJECT, " export")
-                            putExtra(Intent.EXTRA_TEXT, json)
-                        }
-                        ctx.startActivity(Intent.createChooser(intent, "Export data"))
-                    }) {
-                        Text("Export & share")
-                    }
                 }
             }
-        }
-
-        item {
-            Text("CONNECTION", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(connection.model.displayName, style = MaterialTheme.typography.titleMedium)
-                    Text("State: ${connection.state.label}")
-                    connection.address?.let { Text("MAC: $it") }
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onScan, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Filled.Bluetooth, null, Modifier.size(18.dp))
-                            Spacer(Modifier.size(6.dp))
-                            Text("Scan")
-                        }
-                        OutlinedButton(onClick = onDisconnect, modifier = Modifier.weight(1f)) {
-                            Text("Disconnect")
-                        }
-                    }
-                }
+            item {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    placeholder = { Text("Search settings") },
+                    shape = RoundedCornerShape(14.dp),
+                )
             }
-        }
-
-        item {
-            Text("PERMISSIONS", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        if (notificationAccessGranted)
-                            "Notification access: granted"
-                        else
-                            "Notification access: required to read navigation, calls and messages",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (!notificationAccessGranted) {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = onOpenNotificationAccess) {
-                            Icon(Icons.Filled.NotificationsActive, null, Modifier.size(18.dp))
-                            Spacer(Modifier.size(6.dp))
-                            Text("Open notification access")
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            val ctx = LocalContext.current
-            val prefs = RidePrefs.load(ctx)
-            var extras by remember { mutableStateOf(prefs.extraMapsPackages) }
-            ExtraPackageCard(
-                title = "Extra maps apps",
-                description = "Turn-by-turn from these apps is mirrored too.",
-                packages = extras,
-                hints = listOf("map", "nav", "waze", "osm", "here", "tomtom", "route"),
-                onAdd = { extras = extras + it; prefs.extraMapsPackages = extras },
-                onRemove = { extras = extras - it; prefs.extraMapsPackages = extras },
-            )
-        }
-
-        item {
-            Text("TESTING", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item { KeepScreenOnCard(enabled = keepScreenOn, onChange = onKeepScreenOnChange) }
-
-        item {
-            Text("ALERTS", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            val ctx = LocalContext.current
-            val prefs = remember { RidePrefs.load(ctx) }
-            var mirrorCalls by remember { mutableStateOf(prefs.mirrorPhoneCalls) }
-            var mirrorMessages by remember { mutableStateOf(prefs.mirrorMessages) }
-            var mirrorText by remember { mutableStateOf(prefs.mirrorMessageText) }
-            var callDetails by remember { mutableStateOf(prefs.mirrorCallDetails) }
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Phone & app calls", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Show incoming calls (phone, WhatsApp, Telegram, etc.) on the cluster.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AppSwitch(
-                            checked = mirrorCalls,
-                            onCheckedChange = {
-                                mirrorCalls = it
-                                prefs.mirrorPhoneCalls = it
-                            },
-                        )
-                    }
-                    HorizontalDivider()
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Messages", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Show sender and app (WhatsApp, Telegram, SMS, etc.). " +
-                                    "The optional message-text setting below replaces this line with the message body.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AppSwitch(
-                            checked = mirrorMessages,
-                            onCheckedChange = {
-                                mirrorMessages = it
-                                prefs.mirrorMessages = it
-                            },
-                        )
-                    }
-                    HorizontalDivider()
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Mirror any app's notifications",
-                                style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Show any app's notification on the cluster as a message. " +
-                                    "System notifications are skipped; the Messages switch still applies.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AppSwitch(
-                            checked = prefs.mirrorAnyAppNotifications,
-                            onCheckedChange = { prefs.mirrorAnyAppNotifications = it },
-                        )
-                    }
-                    HorizontalDivider()
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Show message text", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Send up to 17 characters of the newest message body to the " +
-                                    "scooter display over Bluetooth. Nothing is uploaded to TVS.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AppSwitch(
-                            checked = mirrorText,
-                            onCheckedChange = {
-                                mirrorText = it
-                                prefs.mirrorMessageText = it
-                            },
-                        )
-                    }
-                    HorizontalDivider()
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Show call type", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Add Missed or Out to the caller name when Android provides that information.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        AppSwitch(
-                            checked = callDetails,
-                            onCheckedChange = {
-                                callDetails = it
-                                prefs.mirrorCallDetails = it
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            val ctx = LocalContext.current
-            val prefs = RidePrefs.load(ctx)
-            var extras by remember { mutableStateOf(prefs.extraMessagePackages) }
-            ExtraPackageCard(
-                title = "Extra message apps",
-                description = "Notifications from these apps are shown as messages.",
-                packages = extras,
-                hints = listOf("whatsapp", "telegram", "message", "messenger", "signal",
-                    "discord", "slack", "chat", "sms"),
-                onAdd = { extras = extras + it; prefs.extraMessagePackages = extras },
-                onRemove = { extras = extras - it; prefs.extraMessagePackages = extras },
-            )
-        }
-
-        item {
-            val ctx = LocalContext.current
-            val prefs = RidePrefs.load(ctx)
-            var extras by remember { mutableStateOf(prefs.extraCallPackages) }
-            ExtraPackageCard(
-                title = "Extra call apps",
-                description = "Incoming-call notifications from these apps are shown on the cluster.",
-                packages = extras,
-                hints = listOf("whatsapp", "telegram", "call", "phone", "dialer", "meet", "duo"),
-                onAdd = { extras = extras + it; prefs.extraCallPackages = extras },
-                onRemove = { extras = extras - it; prefs.extraCallPackages = extras },
-            )
-        }
-
-        item {
-            Text("PROTOCOL TRANSPARENCY", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "What is verified, and what still needs your scooter",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Nucleus.describe().forEachIndexed { index, (model, facts) ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline,
-                            )
-                        }
+            if (filteredCategories.isEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
                         Text(
-                            model.displayName,
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.padding(top = 8.dp),
+                            "No settings categories match “$searchQuery”. Try another search.",
+                            Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodyMedium,
                         )
-                        facts.forEach { (fact, confidence) ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    when (confidence) {
-                                        Confidence.VERIFIED_FROM_APK -> "●"
-                                        Confidence.INHERITED_UNVERIFIED -> "◐"
-                                        Confidence.NEEDS_CAPTURE -> "○"
-                                    },
-                                    color = when (confidence) {
-                                        Confidence.VERIFIED_FROM_APK -> MaterialTheme.colorScheme.primary
-                                        Confidence.INHERITED_UNVERIFIED -> MaterialTheme.colorScheme.tertiary
-                                        Confidence.NEEDS_CAPTURE -> MaterialTheme.colorScheme.outline
-                                    },
-                                    modifier = Modifier.padding(end = 8.dp),
-                                )
-                                Text(fact, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            } else {
+                items(filteredCategories, key = { it.name }) { category ->
+                    val summary = when (category) {
+                        SettingsCategory.MY_SCOOTER ->
+                            "${connection.model.displayName} · ${connection.state.label}"
+                        SettingsCategory.CONNECTION ->
+                            if (autoConnect) "Automatic connection is enabled" else "Automatic connection is off"
+                        SettingsCategory.NAVIGATION ->
+                            if (!capabilities.navigationHud) "Not supported by this scooter"
+                            else "Implemented · hardware verification pending"
+                        SettingsCategory.CALLS_MESSAGES ->
+                            if (!capabilities.callerId && !capabilities.textMessages) "Not supported by this scooter"
+                            else "Implemented · hardware verification pending"
+                        SettingsCategory.CLUSTER_DISPLAY ->
+                            if (!capabilities.riderName && !capabilities.brightness && !capabilities.calibration)
+                                "No cluster display controls available"
+                            else "Supported controls · hardware verification pending"
+                        SettingsCategory.RIDE_PREFERENCES ->
+                            if (!capabilities.keepalive) "Ride Mode control not supported"
+                            else if (rideMode) "Ride Mode resumes after reboot" else "Ride Mode resume is off"
+                        SettingsCategory.APPEARANCE -> "Theme and screen-awake preferences"
+                        SettingsCategory.DATA_PRIVACY -> "Local ride history and data export"
+                        SettingsCategory.ADVANCED -> "Diagnostics, protocol confidence and test information"
+                        SettingsCategory.ABOUT -> "Version ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}"
+                    }
+                    SettingsCategoryRow(category, summary) { selectedCategory = category.name }
+                }
+            }
+            item {
+                Text(
+                    "Your ride history and preferences are stored on this phone. Nothing is sent to a TVS account.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
+                )
+            }
+        } else {
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { selectedCategory = null }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to settings")
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(selected.title, style = MaterialTheme.typography.headlineSmall)
+                        Text(
+                            selected.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                when (selected) {
+                    SettingsCategory.MY_SCOOTER -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(connection.model.displayName, style = MaterialTheme.typography.titleLarge)
+                                    Text("Bluetooth state: ${connection.state.label}")
+                                    connection.address?.let {
+                                        Text("Paired device: $it", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = onScan, modifier = Modifier.weight(1f)) {
+                                    Icon(Icons.Filled.Bluetooth, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.size(6.dp))
+                                    Text("Find / change scooter")
+                                }
+                                OutlinedButton(
+                                    onClick = onDisconnect,
+                                    enabled = connection.state != ConnectionState.DISCONNECTED,
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Disconnect") }
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "● verified from the official APK   " +
-                            "◐ inherited, unverified   ○ needs capture",
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+
+                    SettingsCategory.CONNECTION -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text("Bluetooth connection", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        "Current state: ${connection.state.label}. Auto-connect uses Android's nearby-device association when enabled.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            SettingsToggleCard(
+                                "Auto-connect near vehicle",
+                                "Connect when your associated scooter becomes reachable, even if TVSRide is closed.",
+                                autoConnect,
+                                onAutoConnectChange,
+                            )
+                            DozeCard()
+                            OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Filled.Bluetooth, null, Modifier.size(18.dp))
+                                Spacer(Modifier.size(6.dp))
+                                Text("Find or pair a scooter")
+                            }
+                        }
+                    }
+
+                    SettingsCategory.NAVIGATION -> {
+                        if (!capabilities.navigationHud) {
+                            UnsupportedFeatureCard(
+                                "Navigation mirroring",
+                                connection.model.displayName,
+                                "The selected scooter driver does not currently provide a navigation control and text channel.",
+                            )
+                        } else {
+                            val ctx = LocalContext.current
+                            val prefs = remember { RidePrefs.load(ctx) }
+                            var extras by remember { mutableStateOf(prefs.extraMapsPackages) }
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                SettingsToggleCard(
+                                    "Navigation mirroring",
+                                    "Send turn-by-turn instructions from supported map apps to your scooter display.",
+                                    navMirroring,
+                                    onNavMirrorChange,
+                                )
+                                FeatureVerificationNote()
+                                NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
+                                ExtraPackageCard(
+                                    "Extra maps apps",
+                                    "Add map apps that are not detected automatically.",
+                                    extras,
+                                    listOf("map", "nav", "waze", "osm", "here", "tomtom", "route"),
+                                    onAdd = {
+                                        val updated = extras + it
+                                        extras = updated
+                                        prefs.extraMapsPackages = updated
+                                    },
+                                    onRemove = {
+                                        val updated = extras - it
+                                        extras = updated
+                                        prefs.extraMapsPackages = updated
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    SettingsCategory.CALLS_MESSAGES -> {
+                        if (!capabilities.callerId && !capabilities.textMessages) {
+                            UnsupportedFeatureCard(
+                                "Calls and messages",
+                                connection.model.displayName,
+                                "This scooter model does not currently have a verified caller or message display channel.",
+                            )
+                        } else {
+                            val ctx = LocalContext.current
+                            val prefs = remember { RidePrefs.load(ctx) }
+                            var mirrorCalls by remember { mutableStateOf(prefs.mirrorPhoneCalls) }
+                            var mirrorMessages by remember { mutableStateOf(prefs.mirrorMessages) }
+                            var mirrorAnyApp by remember { mutableStateOf(prefs.mirrorAnyAppNotifications) }
+                            var mirrorText by remember { mutableStateOf(prefs.mirrorMessageText) }
+                            var callDetails by remember { mutableStateOf(prefs.mirrorCallDetails) }
+                            var extraMessages by remember { mutableStateOf(prefs.extraMessagePackages) }
+                            var extraCalls by remember { mutableStateOf(prefs.extraCallPackages) }
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                FeatureVerificationNote()
+                                NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
+                                Card(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        if (capabilities.callerId) {
+                                            SettingsToggleRow(
+                                                "Phone & app calls",
+                                                "Show incoming calls from the phone, WhatsApp, Telegram and other supported apps.",
+                                                mirrorCalls,
+                                                { mirrorCalls = it; prefs.mirrorPhoneCalls = it },
+                                            )
+                                        }
+                                        if (capabilities.callerId && capabilities.textMessages) HorizontalDivider()
+                                        if (capabilities.textMessages) {
+                                            SettingsToggleRow(
+                                                "Messages",
+                                                "Show the sender and app for SMS, WhatsApp, Telegram and other supported messages.",
+                                                mirrorMessages,
+                                                { mirrorMessages = it; prefs.mirrorMessages = it },
+                                            )
+                                            HorizontalDivider()
+                                            SettingsToggleRow(
+                                                "Mirror any app's notifications",
+                                                "Show non-system app notifications as messages. The Messages switch still applies.",
+                                                mirrorAnyApp,
+                                                { mirrorAnyApp = it; prefs.mirrorAnyAppNotifications = it },
+                                            )
+                                            HorizontalDivider()
+                                            SettingsToggleRow(
+                                                "Show message text",
+                                                "Send up to 17 characters of the newest message body to the scooter display over Bluetooth.",
+                                                mirrorText,
+                                                { mirrorText = it; prefs.mirrorMessageText = it },
+                                            )
+                                        }
+                                        if (capabilities.callerId) {
+                                            HorizontalDivider()
+                                            SettingsToggleRow(
+                                                "Show call type",
+                                                "Add Missed or Out to the caller name when Android provides that information.",
+                                                callDetails,
+                                                { callDetails = it; prefs.mirrorCallDetails = it },
+                                            )
+                                        }
+                                    }
+                                }
+                                if (capabilities.textMessages) {
+                                    ExtraPackageCard(
+                                        "Extra message apps",
+                                        "Add apps whose notifications should appear as messages.",
+                                        extraMessages,
+                                        listOf("whatsapp", "telegram", "message", "messenger", "signal", "discord", "slack", "chat", "sms"),
+                                        onAdd = {
+                                            val updated = extraMessages + it
+                                            extraMessages = updated
+                                            prefs.extraMessagePackages = updated
+                                        },
+                                        onRemove = {
+                                            val updated = extraMessages - it
+                                            extraMessages = updated
+                                            prefs.extraMessagePackages = updated
+                                        },
+                                    )
+                                }
+                                if (capabilities.callerId) {
+                                    ExtraPackageCard(
+                                        "Extra call apps",
+                                        "Add apps whose incoming-call notifications should appear on the cluster.",
+                                        extraCalls,
+                                        listOf("whatsapp", "telegram", "call", "phone", "dialer", "meet", "duo"),
+                                        onAdd = {
+                                            val updated = extraCalls + it
+                                            extraCalls = updated
+                                            prefs.extraCallPackages = updated
+                                        },
+                                        onRemove = {
+                                            val updated = extraCalls - it
+                                            extraCalls = updated
+                                            prefs.extraCallPackages = updated
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    SettingsCategory.CLUSTER_DISPLAY -> {
+                        if (!capabilities.riderName && !capabilities.brightness && !capabilities.calibration) {
+                            UnsupportedFeatureCard(
+                                "Cluster display controls",
+                                connection.model.displayName,
+                                "This model does not currently expose a verified rider greeting, brightness or calibration control.",
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                FeatureVerificationNote()
+                                if (capabilities.riderName) RiderNameCard(riderName, onRiderNameChange)
+                                if (capabilities.brightness || capabilities.calibration) {
+                                    ClusterControlsCard(
+                                        connected = connection.state == ConnectionState.CONNECTED,
+                                        brightnessSupported = capabilities.brightness,
+                                        calibrationSupported = capabilities.calibration,
+                                        onSetBrightness = onSetBrightness,
+                                        onSetCalibration = onSetCalibration,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    SettingsCategory.RIDE_PREFERENCES -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (capabilities.keepalive) {
+                                SettingsToggleCard(
+                                    "Keep Ride Mode active",
+                                    "Resume Ride Mode automatically after a scooter reboot.",
+                                    rideMode,
+                                    onRideModeChange,
+                                )
+                            } else {
+                                UnsupportedFeatureCard(
+                                    "Keep Ride Mode active",
+                                    connection.model.displayName,
+                                    "This model does not currently expose the required keepalive capability.",
+                                )
+                            }
+                            KeepScreenOnCard(keepScreenOn, onKeepScreenOnChange)
+                        }
+                    }
+
+                    SettingsCategory.APPEARANCE -> AppearanceCard()
+
+                    SettingsCategory.DATA_PRIVACY -> {
+                        val ctx = LocalContext.current
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("Your data stays on this phone", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    "Ride history, settings and the last parked location are stored locally. Export only when you choose to share them.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                OutlinedButton(onClick = {
+                                    val json = DataExport.buildJson(ctx)
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/json"
+                                        putExtra(Intent.EXTRA_SUBJECT, "TVSRide data export")
+                                        putExtra(Intent.EXTRA_TEXT, json)
+                                    }
+                                    ctx.startActivity(Intent.createChooser(intent, "Export data"))
+                                }) { Text("Export & share data") }
+                            }
+                        }
+                    }
+
+                    SettingsCategory.ADVANCED -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Live connection logs", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        "Inspect connection events and raw Bluetooth frames when troubleshooting.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    OutlinedButton(onClick = onOpenDiagnostics) {
+                                        Icon(Icons.Filled.Science, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.size(6.dp))
+                                        Text("Open diagnostics")
+                                    }
+                                }
+                            }
+                            Card(
+                                Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            ) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Vehicle capability confidence", style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold)
+                                    Nucleus.describe().forEachIndexed { index, (model, facts) ->
+                                        if (index > 0) HorizontalDivider(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            color = MaterialTheme.colorScheme.outline,
+                                        )
+                                        Text(model.displayName, style = MaterialTheme.typography.labelLarge,
+                                            modifier = Modifier.padding(top = 8.dp))
+                                        facts.forEach { (fact, confidence) ->
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    when (confidence) {
+                                                        Confidence.VERIFIED_FROM_APK -> "●"
+                                                        Confidence.INHERITED_UNVERIFIED -> "◐"
+                                                        Confidence.NEEDS_CAPTURE -> "○"
+                                                    },
+                                                    color = when (confidence) {
+                                                        Confidence.VERIFIED_FROM_APK -> MaterialTheme.colorScheme.primary
+                                                        Confidence.INHERITED_UNVERIFIED -> MaterialTheme.colorScheme.tertiary
+                                                        Confidence.NEEDS_CAPTURE -> MaterialTheme.colorScheme.outline
+                                                    },
+                                                    modifier = Modifier.padding(end = 8.dp),
+                                                )
+                                                Text(fact, style = MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        "● verified from the official APK   ◐ inherited, unverified   ○ needs capture",
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            }
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("Pictograms (${Pictograms.ids.size})", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "Official app table. Two tables disagree upstream — see docs/NAVIGATION.md if an arrow renders wrong.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Card(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("Navigation display", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "Instructions are compressed before being sent. For example: Turn left onto Example Road becomes <- LFT to Example Rd.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    Text(
+                                        "Arrow prefixes mark the turn (<- left, -> right, ^ straight, U U-turn, O roundabout). Text wider than the row scrolls instead of clipping.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    Text(
+                                        "Compression, arrows and scrolling run on the phone and are unit-tested. Cluster rendering still needs scooter verification.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    SettingsCategory.ABOUT -> {
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(
+                                Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(Icons.Filled.Info, null, tint = MaterialTheme.colorScheme.primary)
+                                Text("TVSRide", style = MaterialTheme.typography.titleLarge)
+                                Text(
+                                    "Build ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "No account. No TVS server. Internet access is used for map tiles only.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
                 }
             }
+            item { Spacer(Modifier.height(16.dp)) }
         }
+    }
+}
 
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Pictograms (${Pictograms.ids.size})",
-                        style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Official app table. Two tables disagree upstream — " +
-                            "see docs/NAVIGATION.md if an arrow renders wrong.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+private enum class SettingsCategory(
+    val title: String,
+    val description: String,
+    val searchTerms: String,
+    val icon: ImageVector,
+) {
+    MY_SCOOTER("My scooter", "Select, pair or disconnect your vehicle",
+        "vehicle scooter model scan pairing bluetooth", Icons.Filled.Bluetooth),
+    CONNECTION("Connection", "Auto-connect, reconnect and Android background settings",
+        "bluetooth automatic reconnect battery doze background", Icons.Filled.Bluetooth),
+    NAVIGATION("Navigation", "Maps and turn-by-turn instructions on your cluster",
+        "maps waze route directions navigation mirroring", Icons.Filled.Navigation),
+    CALLS_MESSAGES("Calls & messages", "Choose which notifications appear on your scooter",
+        "phone calls call type sms whatsapp telegram notifications access message text", Icons.Filled.NotificationsActive),
+    CLUSTER_DISPLAY("Cluster display", "Rider greeting, brightness and cluster timers",
+        "name greeting brightness calibration timer display", Icons.Filled.Build),
+    RIDE_PREFERENCES("Ride preferences", "Ride Mode and screen-awake behaviour",
+        "ride mode resume reboot keep screen awake", Icons.Filled.Tune),
+    APPEARANCE("Appearance", "Light, dark and system theme",
+        "theme light dark colour color", Icons.Filled.Palette),
+    DATA_PRIVACY("Data & privacy", "Local storage and export your data",
+        "privacy local data export json rides history", Icons.Filled.Storage),
+    ADVANCED("Advanced & diagnostics", "Logs, protocol confidence and technical details",
+        "advanced diagnostics logs raw ble frames protocol pictograms", Icons.Filled.Science),
+    ABOUT("About", "App version and project information",
+        "version build app information support", Icons.Filled.Info),
+}
+
+@Composable
+private fun SettingsCategoryRow(
+    category: SettingsCategory,
+    summary: String,
+    onClick: () -> Unit,
+) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(category.icon, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.size(14.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(category.title, style = MaterialTheme.typography.titleMedium)
+                Text(category.description, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(summary, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            Text("›", style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun SettingsToggleCard(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        SettingsToggleRow(title, description, checked, onCheckedChange, Modifier.padding(16.dp))
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(description, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        AppSwitch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun NotificationAccessCard(granted: Boolean, onOpenSettings: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.NotificationsActive, null,
+                    tint = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary)
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    if (granted) "Notification access is enabled" else "Notification access is needed",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+            Text(
+                "Android uses this access to pass navigation, calls and messages to the scooter display. It is optional for basic Bluetooth telemetry.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!granted) OutlinedButton(onClick = onOpenSettings) {
+                Text("Open notification access settings")
             }
         }
+    }
+}
 
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Navigation display", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Every instruction is compressed before it is sent: " +
-                            "Turn left onto Example Road becomes <- LFT to Example Rd.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "The arrow prefix marks the turn at a glance " +
-                            "(<- left, -> right, ^ straight, U U-turn, O roundabout).",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "Text wider than the row scrolls one window per send " +
-                            "instead of clipping its tail.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "Both cluster lines go out together (0x4F + 0x50, rows = 2); " +
-                            "a single alternating line when the second has nothing to show.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "Compression, arrows and scrolling run on the phone and are " +
-                            "unit-tested. Whether the Ntorq renders both lines at once " +
-                            "still needs your scooter.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+
+@Composable
+private fun FeatureVerificationNote() {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Info, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.size(10.dp))
+            Text(
+                "Implemented for this scooter model. Hardware behaviour still needs confirmation on your vehicle.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
+    }
+}
 
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Filled.Science, null)
-                    Text("TVSRide", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Build ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "No account. No TVS server. INTERNET is used for map tiles only.",
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center,
-                    )
-                }
+@Composable
+private fun UnsupportedFeatureCard(
+    feature: String,
+    modelName: String,
+    explanation: String,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Info, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.size(8.dp))
+                Text(feature + " isn't available", style = MaterialTheme.typography.titleMedium)
             }
+            Text(
+                explanation,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Selected vehicle: " + modelName,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-
-        item { Spacer(Modifier.height(8.dp)) }
     }
 }
 
@@ -798,6 +991,8 @@ private fun RiderNameCard(name: String?, onNameChange: (String?) -> Unit) {
 @Composable
 private fun ClusterControlsCard(
     connected: Boolean,
+    brightnessSupported: Boolean,
+    calibrationSupported: Boolean,
     onSetBrightness: (Int) -> Unit,
     onSetCalibration: (command: Int, seconds: Int) -> Unit,
 ) {
@@ -811,68 +1006,73 @@ private fun ClusterControlsCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Cluster controls", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (connected) "Applies immediately on your Jupiter cluster."
-                else "Connect to your scooter to adjust brightness and timers.",
+                if (connected) "Applies immediately to the connected cluster."
+                else "Connect to your scooter to adjust the supported controls.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            Text("Backlight brightness", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                (1..5).forEach { lvl ->
-                    FilterChip(
-                        selected = brightness == lvl,
-                        enabled = connected,
-                        onClick = {
-                            brightness = lvl
-                            prefs.clusterBrightness = lvl
-                            onSetBrightness(lvl)
-                        },
-                        label = { Text("$lvl") },
-                        modifier = Modifier.weight(1f),
-                    )
+            if (brightnessSupported) {
+                Text("Backlight brightness", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (1..5).forEach { lvl ->
+                        FilterChip(
+                            selected = brightness == lvl,
+                            enabled = connected,
+                            onClick = {
+                                brightness = lvl
+                                prefs.clusterBrightness = lvl
+                                onSetBrightness(lvl)
+                            },
+                            label = { Text("$lvl") },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
 
-            HorizontalDivider()
-            Text("Follow-Me Headlamp timer", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(0 to "Off", 10 to "10s", 20 to "20s", 30 to "30s").forEach { (sec, lbl) ->
-                    FilterChip(
-                        selected = followMeSec == sec,
-                        enabled = connected,
-                        onClick = {
-                            followMeSec = sec
-                            prefs.followMeTimerSec = sec
-                            onSetCalibration(
-                                ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
-                                sec,
-                            )
-                        },
-                        label = { Text(lbl) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
+            if (brightnessSupported && calibrationSupported) HorizontalDivider()
 
-            HorizontalDivider()
-            Text("Idle Start-Stop (iGO Assist) timer", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(5 to "5s", 10 to "10s", 15 to "15s", 20 to "20s").forEach { (sec, lbl) ->
-                    FilterChip(
-                        selected = idleStopSec == sec,
-                        enabled = connected,
-                        onClick = {
-                            idleStopSec = sec
-                            prefs.idleStopTimerSec = sec
-                            onSetCalibration(
-                                ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
-                                sec,
-                            )
-                        },
-                        label = { Text(lbl) },
-                        modifier = Modifier.weight(1f),
-                    )
+            if (calibrationSupported) {
+                Text("Follow-Me Headlamp timer", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0 to "Off", 10 to "10s", 20 to "20s", 30 to "30s").forEach { (sec, lbl) ->
+                        FilterChip(
+                            selected = followMeSec == sec,
+                            enabled = connected,
+                            onClick = {
+                                followMeSec = sec
+                                prefs.followMeTimerSec = sec
+                                onSetCalibration(
+                                    ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
+                                    sec,
+                                )
+                            },
+                            label = { Text(lbl) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+                Text("Idle Start-Stop (iGO Assist) timer", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(5 to "5s", 10 to "10s", 15 to "15s", 20 to "20s").forEach { (sec, lbl) ->
+                        FilterChip(
+                            selected = idleStopSec == sec,
+                            enabled = connected,
+                            onClick = {
+                                idleStopSec = sec
+                                prefs.idleStopTimerSec = sec
+                                onSetCalibration(
+                                    ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
+                                    sec,
+                                )
+                            },
+                            label = { Text(lbl) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -939,60 +1139,6 @@ private fun DozeCard() {
                     "Reconnect automatically after a reboot",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RidesCard(rides: List<Ride>, totalRides: Int, totalDistanceKm: Double) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                "$totalRides rides · ${String.format(Locale.US, "%.1f", totalDistanceKm)} km total",
-                style = MaterialTheme.typography.titleSmall,
-            )
-            Text(
-                "Recorded on this phone from the cluster's odometer. No account, no cloud.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (rides.isEmpty()) {
-                Text(
-                    "No rides yet. Connect to the scooter and ride.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            } else {
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                rides.take(5).forEach { ride ->
-                    val df = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
-                    val whenText = df.format(Date(ride.startedAt))
-                    val dist = String.format(Locale.US, "%.1f km", ride.distanceKm)
-                    val dur = if (ride.inProgress) {
-                        "In progress · ${ride.durationMinutes()} min"
-                    } else {
-                        "${ride.durationMinutes()} min"
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                whenText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                dur,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Text(dist, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
             }
         }
     }

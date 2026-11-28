@@ -158,6 +158,8 @@ class JupiterDriver(
     }
 
     override val capabilities = Capabilities(
+        telemetry = true,
+        riderName = true,
         findMyScooter = true,
         navigationHud = true,
         textMessages = true,

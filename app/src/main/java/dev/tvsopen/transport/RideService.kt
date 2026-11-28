@@ -151,9 +151,16 @@ class RideService : android.app.Service() {
                     callFallbackJob = null
                     Session.clearActiveCall()
                 }
-                // OFFHOOK means the call was answered or outgoing. Keep the
-                // alert until IDLE so the cluster is not cleared mid-call.
-                else -> Unit
+                TelephonyManager.CALL_STATE_OFFHOOK -> {
+                    // Samsung may replace its in-call notification when the
+                    // call is answered. Some devices also expose OFFHOOK as
+                    // the first observed state, without a preceding RINGING.
+                    // Keep the SIM call active until IDLE so notification
+                    // removal cannot clear the caller alert prematurely.
+                    val mirrorCalls = RidePrefs.load(applicationContext).mirrorPhoneCalls
+                    Session.setSimCallActive(mirrorCalls)
+                    Log.d(TAG, "SIM call active after OFFHOOK (mirroring=$mirrorCalls)")
+                }
             }
         }.also { it.start() }
         Log.i(TAG, "service created (v${dev.tvsopen.BuildConfig.VERSION_NAME}, sdk ${android.os.Build.VERSION.SDK_INT})")
@@ -229,7 +236,21 @@ class RideService : android.app.Service() {
         connect(address, model)
     }
 
+    @Synchronized
     fun connect(address: String, model: VehicleModel, fromReconnect: Boolean = false): Boolean {
+        val currentState = ble?.state?.value
+        if (RideConnectionPolicy.isDuplicateActiveConnection(
+                currentAddress = lastAddress,
+                currentModel = lastModel,
+                currentState = currentState,
+                requestedAddress = address,
+                requestedModel = model,
+            )
+        ) {
+            Log.d(TAG, "duplicate connect ignored (same vehicle; state=$currentState)")
+            return true
+        }
+
         linkJob?.cancel()
         linkJob = null
         if (!fromReconnect) {

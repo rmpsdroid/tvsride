@@ -4,6 +4,8 @@
 package dev.tvsopen.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelDefaultsTest {
@@ -28,4 +30,32 @@ class ModelDefaultsTest {
         assertEquals(65, ManeuverResolver.fromText("First exit"))
         assertEquals(68, ManeuverResolver.fromText("At the roundabout"))
     }
+    @Test
+    fun `vehicle capability flags only advertise implemented features`() {
+        val generic = GenericDriver(VehicleModel.UNKNOWN).capabilities
+        assertFalse(generic.telemetry)
+        assertFalse(generic.riderName)
+        assertFalse(generic.navigationHud)
+        assertFalse(generic.findMyScooter)
+        assertFalse(generic.keepalive)
+
+        val jupiter = JupiterDriver(VehicleModel.JUPITER_110).capabilities
+        assertTrue(jupiter.telemetry)
+        assertTrue(jupiter.riderName)
+        assertTrue(jupiter.navigationHud)
+        assertTrue(jupiter.callerId)
+        assertTrue(jupiter.textMessages)
+        assertTrue(jupiter.brightness)
+        assertTrue(jupiter.calibration)
+
+        val ntorq = NtorqDriver(VehicleModel.NTORQ_125_RACE).capabilities
+        assertTrue(ntorq.telemetry)
+        assertTrue(ntorq.riderName)
+        assertTrue(ntorq.navigationHud)
+        assertFalse(ntorq.callerId)
+        assertFalse(ntorq.textMessages)
+        assertFalse(ntorq.brightness)
+        assertFalse(ntorq.calibration)
+    }
+
 }
