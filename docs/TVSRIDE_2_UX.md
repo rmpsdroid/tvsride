@@ -231,10 +231,21 @@ Implemented on this branch:
 - Exposed Navigation mirroring and Keep Ride Mode active in Settings while retaining their Ride-screen quick controls.
 - Corrected the Ride connection card so Connecting, Connected, Reconnecting and Disconnected are described consistently with the status pill.
 
+### Milestone 3 — model-aware feature availability
+
+Implemented on this branch:
+- Added explicit driver capability flags for model-specific telemetry and rider-name support.
+- The generic fallback driver no longer advertises keepalive support when it cannot build a keepalive frame.
+- Ride hides telemetry tiles and vehicle controls that the selected driver does not implement.
+- Settings hides unsupported navigation, calls/messages, rider greeting, brightness and calibration controls, and explains why a feature is unavailable.
+- Supported-but-not-yet-hardware-verified features are clearly labelled as awaiting confirmation on the selected scooter.
+- Added unit coverage for Generic, Jupiter and Ntorq capability declarations.
+- Corrected the Ntorq capability declaration for calibration: the current driver does not implement a calibration frame builder, so the UI no longer offers those controls.
+
 ### Remaining work
 
+- Complete the Diagnostics lifecycle timeline and permission/clock-sync summary.
 - Run CI unit tests and Android debug build for this milestone, then review the new APK.
 - Review the category index and each Settings page on the target phone for readability and navigation.
 - Test Bluetooth scanning, connection, telemetry freshness, reconnect and vehicle commands with the actual Jupiter 110.
-- Continue with model-aware capability visibility and the fuller Diagnostics lifecycle/permission summary.
 - Complete daylight, dark-mode and real-ride checks; screenshots without scooter hardware are not hardware verification.
