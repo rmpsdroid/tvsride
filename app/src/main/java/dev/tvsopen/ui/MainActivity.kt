@@ -232,7 +232,13 @@ class MainActivity : AppCompatActivity() {
                             onBack = { scanning.value = false },
                         )
                     } else if (showDiagnostics) {
-                        LogScreen(onBack = { showDiagnostics = false })
+                        LogScreen(
+                            onBack = { showDiagnostics = false },
+                            connection = connection,
+                            telemetry = telemetry,
+                            hasBluetoothPermission = hasBlePermission(),
+                            hasNotificationAccess = hasNotificationAccess,
+                        )
                     } else if (tab == 0) {
                         RideScreen(
                             telemetry = telemetry,
