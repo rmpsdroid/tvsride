@@ -153,7 +153,7 @@ fun MoreScreen(
                 items(filteredCategories, key = { it.name }) { category ->
                     val summary = when (category) {
                         SettingsCategory.MY_SCOOTER ->
-                            "\${connection.model.displayName} · \${connection.state.label}"
+                            "${connection.model.displayName} · ${connection.state.label}"
                         SettingsCategory.CONNECTION ->
                             if (autoConnect) "Automatic connection is enabled" else "Automatic connection is off"
                         SettingsCategory.NAVIGATION ->
@@ -167,7 +167,7 @@ fun MoreScreen(
                         SettingsCategory.APPEARANCE -> "Theme and screen-awake preferences"
                         SettingsCategory.DATA_PRIVACY -> "Local ride history and data export"
                         SettingsCategory.ADVANCED -> "Diagnostics, protocol confidence and test information"
-                        SettingsCategory.ABOUT -> "Version \${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}"
+                        SettingsCategory.ABOUT -> "Version ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}"
                     }
                     SettingsCategoryRow(category, summary) { selectedCategory = category.name }
                 }
@@ -203,7 +203,7 @@ fun MoreScreen(
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(connection.model.displayName, style = MaterialTheme.typography.titleLarge)
-                                    Text("Bluetooth state: \${connection.state.label}")
+                                    Text("Bluetooth state: ${connection.state.label}")
                                     connection.address?.let {
                                         Text("Paired device: $it", style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -231,7 +231,7 @@ fun MoreScreen(
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("Bluetooth connection", style = MaterialTheme.typography.titleMedium)
                                     Text(
-                                        "Current state: \${connection.state.label}. Auto-connect uses Android's nearby-device association when enabled.",
+                                        "Current state: ${connection.state.label}. Auto-connect uses Android's nearby-device association when enabled.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -458,7 +458,7 @@ fun MoreScreen(
                             }
                             Card(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text("Pictograms (\${Pictograms.ids.size})", style = MaterialTheme.typography.titleSmall)
+                                    Text("Pictograms (${Pictograms.ids.size})", style = MaterialTheme.typography.titleSmall)
                                     Text(
                                         "Official app table. Two tables disagree upstream — see docs/NAVIGATION.md if an arrow renders wrong.",
                                         style = MaterialTheme.typography.bodySmall,
@@ -497,7 +497,7 @@ fun MoreScreen(
                                 Icon(Icons.Filled.Info, null, tint = MaterialTheme.colorScheme.primary)
                                 Text("TVSRide", style = MaterialTheme.typography.titleLarge)
                                 Text(
-                                    "Build \${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}",
+                                    "Build ${dev.tvsopen.BuildConfig.BUILD_VERSION_LABEL}",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
