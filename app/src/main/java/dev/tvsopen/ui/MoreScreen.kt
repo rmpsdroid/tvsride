@@ -246,6 +246,12 @@ fun MoreScreen(
         }
 
         item {
+            Text("NAVIGATION", style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        item {
             val ctx = LocalContext.current
             val prefs = RidePrefs.load(ctx)
             var extras by remember { mutableStateOf(prefs.extraMapsPackages) }
