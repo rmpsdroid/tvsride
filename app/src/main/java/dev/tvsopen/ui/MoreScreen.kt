@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -100,15 +101,15 @@ fun MoreScreen(
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val categories = SettingsCategory.values().toList()
     val filteredCategories = remember(searchQuery) {
-        val query = searchQuery.trim().lowercase()
-        if (query.isEmpty()) categories
-        else categories.filter {
-            it.title.lowercase().contains(query) ||
-                it.description.lowercase().contains(query) ||
-                it.searchTerms.contains(query)
+        val queryTerms = searchQuery.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (queryTerms.isEmpty()) categories
+        else categories.filter { category ->
+            val searchable = "${category.title} ${category.description} ${category.searchTerms}".lowercase()
+            queryTerms.all { term -> searchable.contains(term) }
         }
     }
     val selected = categories.firstOrNull { it.name == selectedCategory }
+    BackHandler(enabled = selected != null) { selectedCategory = null }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -527,7 +528,7 @@ private enum class SettingsCategory(
     NAVIGATION("Navigation", "Maps and turn-by-turn instructions on your cluster",
         "maps waze route directions navigation mirroring", Icons.Filled.Navigation),
     CALLS_MESSAGES("Calls & messages", "Choose which notifications appear on your scooter",
-        "phone calls sms whatsapp telegram notifications message text", Icons.Filled.NotificationsActive),
+        "phone calls call type sms whatsapp telegram notifications access message text", Icons.Filled.NotificationsActive),
     CLUSTER_DISPLAY("Cluster display", "Rider greeting, brightness and cluster timers",
         "name greeting brightness calibration timer display", Icons.Filled.Build),
     RIDE_PREFERENCES("Ride preferences", "Ride Mode and screen-awake behaviour",
