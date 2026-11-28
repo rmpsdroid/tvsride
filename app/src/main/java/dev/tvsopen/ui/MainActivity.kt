@@ -20,7 +20,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Route
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Settings as SettingsNav
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -209,7 +209,7 @@ class MainActivity : AppCompatActivity() {
                         NavigationBarItem(
                             selected = tab == 2,
                             onClick = { tab = 2; showDiagnostics = false },
-                            icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
+                            icon = { Icon(Icons.Filled.SettingsNav, contentDescription = "Settings") },
                             label = { Text("Settings") },
                         )
                     }
