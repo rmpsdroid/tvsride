@@ -695,6 +695,34 @@ private fun NotificationAccessCard(granted: Boolean, onOpenSettings: () -> Unit)
     }
 }
 
+@Composable
+private fun UnsupportedFeatureCard(
+    feature: String,
+    modelName: String,
+    explanation: String,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Info, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.size(8.dp))
+                Text(feature + " isn't available", style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                explanation,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Selected vehicle: " + modelName,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 private data class InstalledApp(val label: String, val packageName: String)
 
 @Composable
