@@ -55,14 +55,11 @@ import dev.tvsopen.prefs.RidePrefs
 import dev.tvsopen.protocol.ClusterFrames
 import dev.tvsopen.protocol.Confidence
 import dev.tvsopen.protocol.Pictograms
-import dev.tvsopen.session.Ride
 import dev.tvsopen.session.Session
 import dev.tvsopen.transport.ConnectionState
 import dev.tvsopen.transport.label
 import dev.tvsopen.ui.theme.ThemeMode
 import dev.tvsopen.ui.theme.ThemePrefs
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -84,6 +81,7 @@ fun MoreScreen(
     onDisconnect: () -> Unit,
     onSetBrightness: (Int) -> Unit = {},
     onSetCalibration: (command: Int, seconds: Int) -> Unit = { _, _ -> },
+    onOpenDiagnostics: () -> Unit = {},
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -91,7 +89,17 @@ fun MoreScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("KEEP THE CONNECTION ALIVE", style = MaterialTheme.typography.labelMedium,
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Settings", style = MaterialTheme.typography.headlineLarge)
+                Text(
+                    "Configure your scooter and TVSRide",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            Text("CONNECTION", style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -143,19 +151,6 @@ fun MoreScreen(
                 onSetBrightness = onSetBrightness,
                 onSetCalibration = onSetCalibration,
             )
-        }
-
-        item {
-            Text("RIDES", style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        item {
-            val rides by Session.rides.collectAsStateWithLifecycle()
-            val totalRides by Session.totalRides.collectAsStateWithLifecycle()
-            val totalDistanceKm by Session.totalRideDistanceKm.collectAsStateWithLifecycle()
-            RidesCard(rides = rides, totalRides = totalRides, totalDistanceKm = totalDistanceKm)
         }
 
         item {
@@ -422,6 +417,30 @@ fun MoreScreen(
                 onAdd = { extras = extras + it; prefs.extraCallPackages = extras },
                 onRemove = { extras = extras - it; prefs.extraCallPackages = extras },
             )
+        }
+
+        item {
+            Text("ADVANCED & DIAGNOSTICS", style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Live connection logs", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Inspect connection events and raw Bluetooth frames when troubleshooting.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = onOpenDiagnostics) {
+                        Icon(Icons.Filled.Science, null, Modifier.size(18.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text("Open diagnostics")
+                    }
+                }
+            }
         }
 
         item {
@@ -939,60 +958,6 @@ private fun DozeCard() {
                     "Reconnect automatically after a reboot",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RidesCard(rides: List<Ride>, totalRides: Int, totalDistanceKm: Double) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                "$totalRides rides · ${String.format(Locale.US, "%.1f", totalDistanceKm)} km total",
-                style = MaterialTheme.typography.titleSmall,
-            )
-            Text(
-                "Recorded on this phone from the cluster's odometer. No account, no cloud.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (rides.isEmpty()) {
-                Text(
-                    "No rides yet. Connect to the scooter and ride.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            } else {
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                rides.take(5).forEach { ride ->
-                    val df = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
-                    val whenText = df.format(Date(ride.startedAt))
-                    val dist = String.format(Locale.US, "%.1f km", ride.distanceKm)
-                    val dur = if (ride.inProgress) {
-                        "In progress · ${ride.durationMinutes()} min"
-                    } else {
-                        "${ride.durationMinutes()} min"
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                whenText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                dur,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Text(dist, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
             }
         }
     }
