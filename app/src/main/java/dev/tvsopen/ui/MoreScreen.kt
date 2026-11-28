@@ -403,24 +403,44 @@ fun MoreScreen(
                     }
 
                     SettingsCategory.CLUSTER_DISPLAY -> {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            RiderNameCard(riderName, onRiderNameChange)
-                            ClusterControlsCard(
-                                connection.state == ConnectionState.CONNECTED,
-                                onSetBrightness,
-                                onSetCalibration,
+                        if (!capabilities.riderName && !capabilities.brightness && !capabilities.calibration) {
+                            UnsupportedFeatureCard(
+                                "Cluster display controls",
+                                connection.model.displayName,
+                                "This model does not currently expose a verified rider greeting, brightness or calibration control.",
                             )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                if (capabilities.riderName) RiderNameCard(riderName, onRiderNameChange)
+                                if (capabilities.brightness || capabilities.calibration) {
+                                    ClusterControlsCard(
+                                        connected = connection.state == ConnectionState.CONNECTED,
+                                        brightnessSupported = capabilities.brightness,
+                                        calibrationSupported = capabilities.calibration,
+                                        onSetBrightness = onSetBrightness,
+                                        onSetCalibration = onSetCalibration,
+                                    )
+                                }
+                            }
                         }
                     }
 
                     SettingsCategory.RIDE_PREFERENCES -> {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            SettingsToggleCard(
-                                "Keep Ride Mode active",
-                                "Resume Ride Mode automatically after a scooter reboot.",
-                                rideMode,
-                                onRideModeChange,
-                            )
+                            if (capabilities.keepalive) {
+                                SettingsToggleCard(
+                                    "Keep Ride Mode active",
+                                    "Resume Ride Mode automatically after a scooter reboot.",
+                                    rideMode,
+                                    onRideModeChange,
+                                )
+                            } else {
+                                UnsupportedFeatureCard(
+                                    "Keep Ride Mode active",
+                                    connection.model.displayName,
+                                    "This model does not currently expose the required keepalive capability.",
+                                )
+                            }
                             KeepScreenOnCard(keepScreenOn, onKeepScreenOnChange)
                         }
                     }
