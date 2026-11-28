@@ -64,14 +64,15 @@ redacted.
   identity. This project is unaffiliated, so borrowing it would imply
   endorsement. The pastel palette comes from the Jupiter companion under its
   licence, which is also well suited to a glance.
-- **Three tabs, not two.** The Jupiter companion has Home and More. This app
-  adds a Log tab, because for a protocol reverse-engineering tool the live frame
-  log is a primary surface, not a debug leftover.
+- **Primary navigation is now Ride, Trips and Settings.** Diagnostics is
+  reachable from Settings → Advanced & Diagnostics rather than occupying a
+  permanent bottom-navigation destination.
 - **No cloud screens.** Rides, community, shop, and account sections are absent
   entirely rather than stubbed, because they cannot exist without TVS's
   servers.
-- **Transparency panel.** The More tab states which protocol facts are verified
-  and which still need hardware confirmation, plus a navigation-display card
-  describing what the app does to each instruction (short codes, arrow
-  prefixes, rolling, two lines). A reverse-engineering app that
-  hides its uncertainty is worse than useless.
+- **Transparency remains available.** Vehicle capability confidence and the
+  navigation-display explanation remain under Settings / Advanced rather than
+  competing with the live rider dashboard.
+
+The TVSRide 2.0 information architecture and implementation status are tracked
+in [TVSRIDE_2_UX.md](TVSRIDE_2_UX.md).
