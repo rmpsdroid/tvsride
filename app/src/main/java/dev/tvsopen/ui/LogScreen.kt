@@ -168,6 +168,11 @@ fun LogScreen(
                         if (minLevel > Level.DEBUG) " · tap DEBUG for raw frames" else "",
                     style = MaterialTheme.typography.labelLarge,
                 )
+                Text(
+                    "Shared exports omit raw BLE payloads to protect caller and message data.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Row(
                     Modifier.fillMaxWidth().padding(top = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -192,12 +197,12 @@ fun LogScreen(
                         } else {
                             Toast.makeText(
                                 ctx,
-                                "Saved to ${out.absolutePath}",
+                                "Saved redacted diagnostics to ${out.absolutePath}",
                                 Toast.LENGTH_LONG,
                             ).show()
                             Log.i(TAG, "exported logs to ${out.absolutePath}")
                         }
-                    }) { Text("Export") }
+                    }) { Text("Export redacted") }
                 }
             }
         }
