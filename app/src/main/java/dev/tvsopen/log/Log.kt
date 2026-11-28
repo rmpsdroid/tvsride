@@ -264,6 +264,12 @@ object Log {
      * strip those before writing a shareable bundle.
      */
     private fun redact(line: String): String {
+        // Raw BLE hex can encode caller names, phone numbers and message text.
+        // Keep frames available in the on-device live viewer, but never include
+        // opaque payloads in a shareable diagnostic export.
+        if (Regex("""\\b[VDIWE]/BLE: """).containsMatchIn(line)) {
+            return line.substringBefore("BLE:") + "BLE: [RAW FRAME OMITTED]"
+        }
         var out = MAC_RE.replace(line, "[MAC]")
         if ("nav from " in out) {
             out = out.substringBefore("nav from ") + "nav from [REDACTED]"
@@ -291,6 +297,7 @@ object Log {
             // the files out from under us and produce a truncated bundle.
             synchronized(lock) {
                 out.bufferedWriter().use { w ->
+                    w.write("TVSRide redacted diagnostics. Raw BLE payloads are omitted.\\n")
                     (2..FILE_KEEP)
                         .map { File(source.parentFile, "tvsride.$it.log") }
                         .filter { it.exists() }
