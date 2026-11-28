@@ -937,6 +937,8 @@ private fun RiderNameCard(name: String?, onNameChange: (String?) -> Unit) {
 @Composable
 private fun ClusterControlsCard(
     connected: Boolean,
+    brightnessSupported: Boolean,
+    calibrationSupported: Boolean,
     onSetBrightness: (Int) -> Unit,
     onSetCalibration: (command: Int, seconds: Int) -> Unit,
 ) {
@@ -950,68 +952,73 @@ private fun ClusterControlsCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Cluster controls", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (connected) "Applies immediately on your Jupiter cluster."
-                else "Connect to your scooter to adjust brightness and timers.",
+                if (connected) "Applies immediately to the connected cluster."
+                else "Connect to your scooter to adjust the supported controls.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            Text("Backlight brightness", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                (1..5).forEach { lvl ->
-                    FilterChip(
-                        selected = brightness == lvl,
-                        enabled = connected,
-                        onClick = {
-                            brightness = lvl
-                            prefs.clusterBrightness = lvl
-                            onSetBrightness(lvl)
-                        },
-                        label = { Text("$lvl") },
-                        modifier = Modifier.weight(1f),
-                    )
+            if (brightnessSupported) {
+                Text("Backlight brightness", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (1..5).forEach { lvl ->
+                        FilterChip(
+                            selected = brightness == lvl,
+                            enabled = connected,
+                            onClick = {
+                                brightness = lvl
+                                prefs.clusterBrightness = lvl
+                                onSetBrightness(lvl)
+                            },
+                            label = { Text("$lvl") },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
 
-            HorizontalDivider()
-            Text("Follow-Me Headlamp timer", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(0 to "Off", 10 to "10s", 20 to "20s", 30 to "30s").forEach { (sec, lbl) ->
-                    FilterChip(
-                        selected = followMeSec == sec,
-                        enabled = connected,
-                        onClick = {
-                            followMeSec = sec
-                            prefs.followMeTimerSec = sec
-                            onSetCalibration(
-                                ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
-                                sec,
-                            )
-                        },
-                        label = { Text(lbl) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
+            if (brightnessSupported && calibrationSupported) HorizontalDivider()
 
-            HorizontalDivider()
-            Text("Idle Start-Stop (iGO Assist) timer", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(5 to "5s", 10 to "10s", 15 to "15s", 20 to "20s").forEach { (sec, lbl) ->
-                    FilterChip(
-                        selected = idleStopSec == sec,
-                        enabled = connected,
-                        onClick = {
-                            idleStopSec = sec
-                            prefs.idleStopTimerSec = sec
-                            onSetCalibration(
-                                ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
-                                sec,
-                            )
-                        },
-                        label = { Text(lbl) },
-                        modifier = Modifier.weight(1f),
-                    )
+            if (calibrationSupported) {
+                Text("Follow-Me Headlamp timer", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0 to "Off", 10 to "10s", 20 to "20s", 30 to "30s").forEach { (sec, lbl) ->
+                        FilterChip(
+                            selected = followMeSec == sec,
+                            enabled = connected,
+                            onClick = {
+                                followMeSec = sec
+                                prefs.followMeTimerSec = sec
+                                onSetCalibration(
+                                    ClusterFrames.CalibrationCommand.FOLLOW_ME_HEADLAMP_TIMER,
+                                    sec,
+                                )
+                            },
+                            label = { Text(lbl) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+                Text("Idle Start-Stop (iGO Assist) timer", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(5 to "5s", 10 to "10s", 15 to "15s", 20 to "20s").forEach { (sec, lbl) ->
+                        FilterChip(
+                            selected = idleStopSec == sec,
+                            enabled = connected,
+                            onClick = {
+                                idleStopSec = sec
+                                prefs.idleStopTimerSec = sec
+                                onSetCalibration(
+                                    ClusterFrames.CalibrationCommand.IDLE_START_STOP_TIMER,
+                                    sec,
+                                )
+                            },
+                            label = { Text(lbl) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
