@@ -18,10 +18,9 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -161,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         hasNotificationAccess: Boolean,
     ) {
         var tab by rememberSaveable { mutableStateOf(0) }
+        var showDiagnostics by rememberSaveable { mutableStateOf(false) }
         var findMy by rememberSaveable { mutableStateOf(false) }
         var navMirroring by rememberSaveable {
             mutableStateOf(RidePrefs.load(this@MainActivity).navigationMirroring)
@@ -195,28 +195,22 @@ class MainActivity : AppCompatActivity() {
                 bottomBar = {
                     if (!scanning.value) NavigationBar {
                         NavigationBarItem(
-                            selected = tab == 0,
-                            onClick = { tab = 0 },
-                            icon = { Icon(Icons.Filled.Home, contentDescription = "Home") },
-                            label = { Text("Home") },
+                            selected = tab == 0 && !showDiagnostics,
+                            onClick = { tab = 0; showDiagnostics = false },
+                            icon = { Icon(Icons.AutoMirrored.Filled.DirectionsBike, contentDescription = "Ride") },
+                            label = { Text("Ride") },
                         )
                         NavigationBarItem(
-                            selected = tab == 1,
-                            onClick = { tab = 1 },
-                            icon = { Icon(Icons.Filled.MoreHoriz, contentDescription = "More") },
-                            label = { Text("More") },
+                            selected = tab == 1 && !showDiagnostics,
+                            onClick = { tab = 1; showDiagnostics = false },
+                            icon = { Icon(Icons.Filled.Route, contentDescription = "Trips") },
+                            label = { Text("Trips") },
                         )
                         NavigationBarItem(
                             selected = tab == 2,
-                            onClick = { tab = 2 },
-                            icon = { Icon(Icons.Filled.Speed, contentDescription = "Overview") },
-                            label = { Text("Overview") },
-                        )
-                        NavigationBarItem(
-                            selected = tab == 3,
-                            onClick = { tab = 3 },
-                            icon = { Icon(Icons.AutoMirrored.Filled.Article, contentDescription = "Log") },
-                            label = { Text("Log") },
+                            onClick = { tab = 2; showDiagnostics = false },
+                            icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
+                            label = { Text("Settings") },
                         )
                     }
                 },
@@ -237,8 +231,10 @@ class MainActivity : AppCompatActivity() {
                             },
                             onBack = { scanning.value = false },
                         )
+                    } else if (showDiagnostics) {
+                        LogScreen(onBack = { showDiagnostics = false })
                     } else if (tab == 0) {
-                        HomeScreen(
+                        RideScreen(
                             telemetry = telemetry,
                             hud = hud,
                             connection = connection,
@@ -265,11 +261,12 @@ class MainActivity : AppCompatActivity() {
                                 RidePrefs.load(this@MainActivity).updateRideMode(on)
                                 Session.setRideMode(on)
                             },
-                            onOpenOverview = { tab = 2 },
-                            onOpenParked = { tab = 2 },
                             onConnect = { openScanner() },
+                            onOpenParked = { tab = 1 },
                         )
                     } else if (tab == 1) {
+                        TripsScreen(parked = parked)
+                    } else {
                         MoreScreen(
                             connection = connection,
                             riderName = RidePrefs.load(this@MainActivity).riderName,
@@ -300,11 +297,8 @@ class MainActivity : AppCompatActivity() {
                                     putExtra(RideService.EXTRA_VALUE, seconds)
                                 }
                             },
+                            onOpenDiagnostics = { showDiagnostics = true },
                         )
-                    } else if (tab == 2) {
-                        OverviewScreen(telemetry = telemetry)
-                    } else {
-                        LogScreen()
                     }
                 }
             }
