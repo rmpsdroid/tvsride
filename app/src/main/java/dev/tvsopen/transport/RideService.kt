@@ -62,6 +62,7 @@ class RideService : android.app.Service() {
     private var reconnectAttempt = 0
     private var tearingDown = false
     private var linkWakeLock: android.os.PowerManager.WakeLock? = null
+    private var reconnectWakeLock: android.os.PowerManager.WakeLock? = null
     private var hadLiveLink = false
     private var telephonyCallMonitor: TelephonyCallMonitor? = null
     private var callFallbackJob: Job? = null
@@ -85,6 +86,33 @@ class RideService : android.app.Service() {
     private fun releaseWakeLock() {
         runCatching { if (linkWakeLock?.isHeld == true) linkWakeLock?.release() }
         linkWakeLock = null
+    }
+
+    /**
+     * Keep the CPU awake for the first few short reconnect windows. Without
+     * this, Android can defer the coroutine delay while the screen is off:
+     * the log showed a 5-second retry not running for ~96 seconds. The timeout
+     * is bounded and later long-backoff attempts rely on companion presence.
+     */
+    private fun holdReconnectWakeLock(timeoutMs: Long) {
+        val pm = getSystemService(android.os.PowerManager::class.java) ?: return
+        val lock = reconnectWakeLock ?: pm.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
+            "TVSRide:reconnect",
+        ).apply {
+            setReferenceCounted(false)
+        }.also { reconnectWakeLock = it }
+        if (!lock.isHeld) {
+            lock.acquire(timeoutMs.coerceAtLeast(1_000L))
+            Log.i(TAG, "reconnect wake lock held for ${timeoutMs}ms")
+        }
+    }
+
+    private fun releaseReconnectWakeLock() {
+        runCatching {
+            if (reconnectWakeLock?.isHeld == true) reconnectWakeLock?.release()
+        }
+        reconnectWakeLock = null
     }
 
     override fun onCreate() {
@@ -207,6 +235,7 @@ class RideService : android.app.Service() {
         if (!fromReconnect) {
             reconnectJob?.cancel()
             reconnectJob = null
+            releaseReconnectWakeLock()
             reconnectAttempt = 0
         }
         tearingDown = false
@@ -315,6 +344,7 @@ class RideService : android.app.Service() {
                             disconnectFinalizeJob = null
                             reconnectJob?.cancel()
                             reconnectJob = null
+                            releaseReconnectWakeLock()
                             reconnectAttempt = 0
                             hadLiveLink = true
                             notify("Connected to ${model.displayName}")
@@ -750,38 +780,57 @@ class RideService : android.app.Service() {
             else -> 180_000L
         }
         reconnectAttempt = attempt + 1
-        Log.i(TAG, "reconnect #${attempt + 1} scheduled in ${wait}ms")
+
+        // Protect the initial 5/10/20-second retries from Doze deferring their
+        // coroutine timers. Keep this deliberately bounded; after three
+        // attempts, Companion Device presence is the background wake-up path.
+        val protectRetry = attempt < SHORT_RECONNECT_WAKE_LOCK_ATTEMPTS
+        if (protectRetry) {
+            holdReconnectWakeLock(wait + CONNECT_ATTEMPT_TIMEOUT_MS + 5_000L)
+        }
+        Log.i(
+            TAG,
+            "reconnect #${attempt + 1} scheduled in ${wait}ms" +
+                if (protectRetry) " (bounded wake lock)" else "",
+        )
+
         reconnectJob = scope.launch {
-            delay(wait)
-            if (tearingDown) return@launch
-            val active = ble?.state?.value
-            if (active == ConnectionState.CONNECTED ||
-                active == ConnectionState.CONNECTING ||
-                active == ConnectionState.SCANNING
-            ) return@launch
+            var retryAgain = false
+            try {
+                delay(wait)
+                if (tearingDown) return@launch
+                val active = ble?.state?.value
+                if (active == ConnectionState.CONNECTED ||
+                    active == ConnectionState.CONNECTING ||
+                    active == ConnectionState.SCANNING
+                ) return@launch
 
-            val started = connect(address, model, fromReconnect = true)
-            if (!started) {
-                Log.w(TAG, "reconnect attempt #${attempt + 1} could not start")
-                reconnectJob = null
-                if (!tearingDown) scheduleReconnect(address, model)
-                return@launch
-            }
-
-            val transport = ble
-            val terminal = if (transport == null) null else withTimeoutOrNull(CONNECT_ATTEMPT_TIMEOUT_MS) {
-                transport.state.first {
-                    it == ConnectionState.CONNECTED || it == ConnectionState.DISCONNECTED
+                val started = connect(address, model, fromReconnect = true)
+                if (!started) {
+                    Log.w(TAG, "reconnect attempt #${attempt + 1} could not start")
+                    retryAgain = true
+                    return@launch
                 }
-            }
-            if (terminal != ConnectionState.CONNECTED) {
-                Log.w(TAG, "reconnect attempt #${attempt + 1} timed out or disconnected")
-                runCatching { transport?.disconnect() }
-                reconnectJob = null
-                if (!tearingDown) scheduleReconnect(address, model)
-            } else {
-                Log.i(TAG, "reconnect attempt #${attempt + 1} connected")
-                reconnectJob = null
+
+                val transport = ble
+                val terminal = if (transport == null) null else withTimeoutOrNull(CONNECT_ATTEMPT_TIMEOUT_MS) {
+                    transport.state.first {
+                        it == ConnectionState.CONNECTED || it == ConnectionState.DISCONNECTED
+                    }
+                }
+                if (terminal != ConnectionState.CONNECTED) {
+                    Log.w(TAG, "reconnect attempt #${attempt + 1} timed out or disconnected")
+                    runCatching { transport?.disconnect() }
+                    retryAgain = true
+                } else {
+                    Log.i(TAG, "reconnect attempt #${attempt + 1} connected")
+                }
+            } finally {
+                releaseReconnectWakeLock()
+                if (retryAgain && !tearingDown) {
+                    reconnectJob = null
+                    scheduleReconnect(address, model)
+                }
             }
         }
     }
@@ -790,6 +839,7 @@ class RideService : android.app.Service() {
         tearingDown = true
         reconnectJob?.cancel()
         reconnectJob = null
+        releaseReconnectWakeLock()
         disconnectFinalizeJob?.cancel()
         disconnectFinalizeJob = null
         callFallbackJob?.cancel()
@@ -860,6 +910,7 @@ class RideService : android.app.Service() {
         private const val TAG = "RideService"
         private const val RIDE_DISCONNECT_GRACE_MS = 15_000L
         private const val CONNECT_ATTEMPT_TIMEOUT_MS = 20_000L
+        private const val SHORT_RECONNECT_WAKE_LOCK_ATTEMPTS = 3
         private const val MESSAGE_ALERT_REPEAT_COUNT = 3
         private const val MESSAGE_ALERT_REPEAT_INTERVAL_MS = 1_500L
         private const val MESSAGE_ALERT_DEBOUNCE_MS = 250L
