@@ -300,71 +300,105 @@ fun MoreScreen(
                     }
 
                     SettingsCategory.CALLS_MESSAGES -> {
-                        val ctx = LocalContext.current
-                        val prefs = remember { RidePrefs.load(ctx) }
-                        var mirrorCalls by remember { mutableStateOf(prefs.mirrorPhoneCalls) }
-                        var mirrorMessages by remember { mutableStateOf(prefs.mirrorMessages) }
-                        var mirrorAnyApp by remember { mutableStateOf(prefs.mirrorAnyAppNotifications) }
-                        var mirrorText by remember { mutableStateOf(prefs.mirrorMessageText) }
-                        var callDetails by remember { mutableStateOf(prefs.mirrorCallDetails) }
-                        var extraMessages by remember { mutableStateOf(prefs.extraMessagePackages) }
-                        var extraCalls by remember { mutableStateOf(prefs.extraCallPackages) }
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
-                            Card(Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    SettingsToggleRow(
-                                        "Phone & app calls",
-                                        "Show incoming calls from the phone, WhatsApp, Telegram and other supported apps.",
-                                        mirrorCalls,
-                                        { mirrorCalls = it; prefs.mirrorPhoneCalls = it },
+                        if (!capabilities.callerId && !capabilities.textMessages) {
+                            UnsupportedFeatureCard(
+                                "Calls and messages",
+                                connection.model.displayName,
+                                "This scooter model does not currently have a verified caller or message display channel.",
+                            )
+                        } else {
+                            val ctx = LocalContext.current
+                            val prefs = remember { RidePrefs.load(ctx) }
+                            var mirrorCalls by remember { mutableStateOf(prefs.mirrorPhoneCalls) }
+                            var mirrorMessages by remember { mutableStateOf(prefs.mirrorMessages) }
+                            var mirrorAnyApp by remember { mutableStateOf(prefs.mirrorAnyAppNotifications) }
+                            var mirrorText by remember { mutableStateOf(prefs.mirrorMessageText) }
+                            var callDetails by remember { mutableStateOf(prefs.mirrorCallDetails) }
+                            var extraMessages by remember { mutableStateOf(prefs.extraMessagePackages) }
+                            var extraCalls by remember { mutableStateOf(prefs.extraCallPackages) }
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
+                                Card(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        if (capabilities.callerId) {
+                                            SettingsToggleRow(
+                                                "Phone & app calls",
+                                                "Show incoming calls from the phone, WhatsApp, Telegram and other supported apps.",
+                                                mirrorCalls,
+                                                { mirrorCalls = it; prefs.mirrorPhoneCalls = it },
+                                            )
+                                        }
+                                        if (capabilities.callerId && capabilities.textMessages) HorizontalDivider()
+                                        if (capabilities.textMessages) {
+                                            SettingsToggleRow(
+                                                "Messages",
+                                                "Show the sender and app for SMS, WhatsApp, Telegram and other supported messages.",
+                                                mirrorMessages,
+                                                { mirrorMessages = it; prefs.mirrorMessages = it },
+                                            )
+                                            HorizontalDivider()
+                                            SettingsToggleRow(
+                                                "Mirror any app's notifications",
+                                                "Show non-system app notifications as messages. The Messages switch still applies.",
+                                                mirrorAnyApp,
+                                                { mirrorAnyApp = it; prefs.mirrorAnyAppNotifications = it },
+                                            )
+                                            HorizontalDivider()
+                                            SettingsToggleRow(
+                                                "Show message text",
+                                                "Send up to 17 characters of the newest message body to the scooter display over Bluetooth.",
+                                                mirrorText,
+                                                { mirrorText = it; prefs.mirrorMessageText = it },
+                                            )
+                                        }
+                                        if (capabilities.callerId) {
+                                            HorizontalDivider()
+                                            SettingsToggleRow(
+                                                "Show call type",
+                                                "Add Missed or Out to the caller name when Android provides that information.",
+                                                callDetails,
+                                                { callDetails = it; prefs.mirrorCallDetails = it },
+                                            )
+                                        }
+                                    }
+                                }
+                                if (capabilities.textMessages) {
+                                    ExtraPackageCard(
+                                        "Extra message apps",
+                                        "Add apps whose notifications should appear as messages.",
+                                        extraMessages,
+                                        listOf("whatsapp", "telegram", "message", "messenger", "signal", "discord", "slack", "chat", "sms"),
+                                        onAdd = {
+                                            val updated = extraMessages + it
+                                            extraMessages = updated
+                                            prefs.extraMessagePackages = updated
+                                        },
+                                        onRemove = {
+                                            val updated = extraMessages - it
+                                            extraMessages = updated
+                                            prefs.extraMessagePackages = updated
+                                        },
                                     )
-                                    HorizontalDivider()
-                                    SettingsToggleRow(
-                                        "Messages",
-                                        "Show the sender and app for SMS, WhatsApp, Telegram and other supported messages.",
-                                        mirrorMessages,
-                                        { mirrorMessages = it; prefs.mirrorMessages = it },
-                                    )
-                                    HorizontalDivider()
-                                    SettingsToggleRow(
-                                        "Mirror any app's notifications",
-                                        "Show non-system app notifications as messages. The Messages switch still applies.",
-                                        mirrorAnyApp,
-                                        { mirrorAnyApp = it; prefs.mirrorAnyAppNotifications = it },
-                                    )
-                                    HorizontalDivider()
-                                    SettingsToggleRow(
-                                        "Show message text",
-                                        "Send up to 17 characters of the newest message body to the scooter display over Bluetooth.",
-                                        mirrorText,
-                                        { mirrorText = it; prefs.mirrorMessageText = it },
-                                    )
-                                    HorizontalDivider()
-                                    SettingsToggleRow(
-                                        "Show call type",
-                                        "Add Missed or Out to the caller name when Android provides that information.",
-                                        callDetails,
-                                        { callDetails = it; prefs.mirrorCallDetails = it },
+                                }
+                                if (capabilities.callerId) {
+                                    ExtraPackageCard(
+                                        "Extra call apps",
+                                        "Add apps whose incoming-call notifications should appear on the cluster.",
+                                        extraCalls,
+                                        listOf("whatsapp", "telegram", "call", "phone", "dialer", "meet", "duo"),
+                                        onAdd = {
+                                            val updated = extraCalls + it
+                                            extraCalls = updated
+                                            prefs.extraCallPackages = updated
+                                        },
+                                        onRemove = {
+                                            val updated = extraCalls - it
+                                            extraCalls = updated
+                                            prefs.extraCallPackages = updated
+                                        },
                                     )
                                 }
                             }
-                            ExtraPackageCard(
-                                "Extra message apps",
-                                "Add apps whose notifications should appear as messages.",
-                                extraMessages,
-                                listOf("whatsapp", "telegram", "message", "messenger", "signal", "discord", "slack", "chat", "sms"),
-                                onAdd = { val updated = extraMessages + it; extraMessages = updated; prefs.extraMessagePackages = updated },
-                                onRemove = { val updated = extraMessages - it; extraMessages = updated; prefs.extraMessagePackages = updated },
-                            )
-                            ExtraPackageCard(
-                                "Extra call apps",
-                                "Add apps whose incoming-call notifications should appear on the cluster.",
-                                extraCalls,
-                                listOf("whatsapp", "telegram", "call", "phone", "dialer", "meet", "duo"),
-                                onAdd = { val updated = extraCalls + it; extraCalls = updated; prefs.extraCallPackages = updated },
-                                onRemove = { val updated = extraCalls - it; extraCalls = updated; prefs.extraCallPackages = updated },
-                            )
                         }
                     }
 
