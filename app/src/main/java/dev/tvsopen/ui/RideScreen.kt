@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -96,12 +97,17 @@ fun RideScreen(
         if (telemetry.lastFrameAt <= 0L) null
         else (System.currentTimeMillis() - telemetry.lastFrameAt).coerceAtLeast(0L)
     }
-    val freshness = when {
-        !connected -> "Connect to see live vehicle information"
-        ageMs == null -> "Bluetooth connected · waiting for cluster data"
-        ageMs < 3_000L -> "Live telemetry"
-        ageMs < Telemetry.STALE_AFTER_MS -> "Updated ${ageMs / 1_000}s ago"
-        else -> "Telemetry is stale · last update ${ageMs / 1_000}s ago"
+    val freshness = when (connection.state) {
+        ConnectionState.DISCONNECTED -> "Connect to see live vehicle information"
+        ConnectionState.SCANNING -> "Searching nearby Bluetooth devices"
+        ConnectionState.CONNECTING -> "Keep your scooter nearby while Bluetooth connects"
+        ConnectionState.RECONNECTING -> "Trying to restore the Bluetooth connection"
+        ConnectionState.CONNECTED -> when {
+            ageMs == null -> "Bluetooth connected · waiting for cluster data"
+            ageMs < 3_000L -> "Live telemetry"
+            ageMs < Telemetry.STALE_AFTER_MS -> "Updated ${ageMs / 1_000}s ago"
+            else -> "Telemetry is stale · last update ${ageMs / 1_000}s ago"
+        }
     }
 
     // A stale speed reading can be dangerous if it looks current. Hide all
@@ -132,8 +138,7 @@ fun RideScreen(
 
         Spacer(Modifier.height(16.dp))
         ConnectionCard(
-            connected = connected,
-            stateLabel = connection.state.label,
+            state = connection.state,
             freshness = freshness,
             onConnect = onConnect,
         )
@@ -353,26 +358,49 @@ private fun ConnectionPill(connected: Boolean, label: String) {
 
 @Composable
 private fun ConnectionCard(
-    connected: Boolean,
-    stateLabel: String,
+    state: ConnectionState,
     freshness: String,
     onConnect: () -> Unit,
 ) {
+    val connecting = state == ConnectionState.CONNECTING || state == ConnectionState.SCANNING
+    val title = when (state) {
+        ConnectionState.DISCONNECTED -> "Your scooter is not connected"
+        ConnectionState.SCANNING -> "Looking for your scooter"
+        ConnectionState.CONNECTING -> "Connecting to your scooter"
+        ConnectionState.CONNECTED -> "Scooter connected"
+        ConnectionState.RECONNECTING -> "Reconnecting to your scooter"
+    }
+    val actionLabel = when (state) {
+        ConnectionState.DISCONNECTED -> "Connect scooter"
+        ConnectionState.SCANNING -> "Searching…"
+        ConnectionState.CONNECTING -> "Connecting…"
+        ConnectionState.CONNECTED -> "Change scooter"
+        ConnectionState.RECONNECTING -> "Find another scooter"
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                if (connected) "Scooter connection is active" else "Your scooter is not connected",
-                style = MaterialTheme.typography.titleMedium,
-            )
+            Text(title, style = MaterialTheme.typography.titleMedium)
             Text(
                 freshness,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onConnect, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Filled.Bluetooth, contentDescription = null, Modifier.size(18.dp))
+            Button(
+                onClick = onConnect,
+                enabled = !connecting,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (connecting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(Icons.Filled.Bluetooth, contentDescription = null, Modifier.size(18.dp))
+                }
                 Spacer(Modifier.width(8.dp))
-                Text(if (connected) "Change scooter" else if (stateLabel.contains("connect", true)) "Connect scooter" else "Find scooter")
+                Text(actionLabel)
             }
         }
     }
