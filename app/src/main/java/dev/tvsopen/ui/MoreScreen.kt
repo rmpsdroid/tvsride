@@ -161,14 +161,14 @@ fun MoreScreen(
                             if (autoConnect) "Automatic connection is enabled" else "Automatic connection is off"
                         SettingsCategory.NAVIGATION ->
                             if (!capabilities.navigationHud) "Not supported by this scooter"
-                            else if (navMirroring) "Turn-by-turn mirroring is on" else "Turn-by-turn mirroring is off"
+                            else "Implemented · hardware verification pending"
                         SettingsCategory.CALLS_MESSAGES ->
                             if (!capabilities.callerId && !capabilities.textMessages) "Not supported by this scooter"
-                            else if (notificationAccessGranted) "Notification access is granted" else "Notification access needed"
+                            else "Implemented · hardware verification pending"
                         SettingsCategory.CLUSTER_DISPLAY ->
                             if (!capabilities.riderName && !capabilities.brightness && !capabilities.calibration)
                                 "No cluster display controls available"
-                            else riderName?.let { "Cluster greeting: $it" } ?: "Rider name, brightness and timers"
+                            else "Supported controls · hardware verification pending"
                         SettingsCategory.RIDE_PREFERENCES ->
                             if (!capabilities.keepalive) "Ride Mode control not supported"
                             else if (rideMode) "Ride Mode resumes after reboot" else "Ride Mode resume is off"
@@ -278,6 +278,7 @@ fun MoreScreen(
                                     navMirroring,
                                     onNavMirrorChange,
                                 )
+                                FeatureVerificationNote()
                                 NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
                                 ExtraPackageCard(
                                     "Extra maps apps",
@@ -317,6 +318,7 @@ fun MoreScreen(
                             var extraMessages by remember { mutableStateOf(prefs.extraMessagePackages) }
                             var extraCalls by remember { mutableStateOf(prefs.extraCallPackages) }
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                FeatureVerificationNote()
                                 NotificationAccessCard(notificationAccessGranted, onOpenNotificationAccess)
                                 Card(Modifier.fillMaxWidth()) {
                                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -411,6 +413,7 @@ fun MoreScreen(
                             )
                         } else {
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                FeatureVerificationNote()
                                 if (capabilities.riderName) RiderNameCard(riderName, onRiderNameChange)
                                 if (capabilities.brightness || capabilities.calibration) {
                                     ClusterControlsCard(
@@ -691,6 +694,29 @@ private fun NotificationAccessCard(granted: Boolean, onOpenSettings: () -> Unit)
             if (!granted) OutlinedButton(onClick = onOpenSettings) {
                 Text("Open notification access settings")
             }
+        }
+    }
+}
+
+
+@Composable
+private fun FeatureVerificationNote() {
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(
+            Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Info, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.size(10.dp))
+            Text(
+                "Implemented for this scooter model. Hardware behaviour still needs confirmation on your vehicle.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
